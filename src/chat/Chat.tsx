@@ -1,6 +1,6 @@
-import { ExtensionCenter, catalog, initializeExtensions, extensionIdForPath, useExtensions, useExtensionPath } from '../extensions/public/host'
+import { catalog, initializeExtensions, extensionIdForPath, useExtensions, useExtensionPath } from '../extensions/public/host'
 import { PluginCenterHeading } from './market/PluginCenterHeading'
-import { lazy, memo, Profiler, startTransition, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ProfilerOnRenderCallback, type ReactNode, type Ref } from 'react'
+import { lazy, memo, Profiler, startTransition, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ProfilerOnRenderCallback, type ReactNode, type Ref, type SetStateAction } from 'react'
 import { SettingsNavFooter, type ConversationSelectionScope, type ExtensionsNavItem } from './Sidebar'
 import { ChatSidebarPane } from './ChatSidebarPane'
 import { MediaStation } from './MediaStation'
@@ -32,21 +32,10 @@ import { useTauriEvent } from './hooks/useTauriEvent'
 import {
   getRouteConversationId,
   hashPath,
-  isChatAssistantCenterPath,
-  isChatKnowledgeCenterPath,
-  isChatMcpCenterPath,
-  isChatNotesPath,
-  isChatReadingPath,
-  isChatMediaPath,
-  isChatOnboardingRoute,
-  isChatPluginCenterPath,
   isChatSessionCenterPath,
-  isChatAutomationsPath,
-  isChatSchedulesPath,
-  isChatSettingsPath,
-  isChatSkillCenterPath,
   conversationHash,
   extensionsNavItemForView,
+  resolveMobileChatView,
   setHash,
 } from './chatRoutes'
 import { AsyncQuestionsContext } from './asyncQuestionsContext'
@@ -57,7 +46,6 @@ import { useConversationContext } from './hooks/useConversationContext'
 import { useConversationMetaMutations } from './hooks/useConversationMetaMutations'
 import { useMessageActions } from './hooks/useMessageActions'
 import { ChatTitlebarActions } from './ChatTitlebarActions'
-import { ModelSelector } from './ModelSelector'
 import { ConversationTitlebarControls } from './ConversationTitlebarControls'
 import { ConversationBranches } from './ConversationBranches'
 import {
@@ -135,7 +123,6 @@ import { estimateTokens } from '../utils/tokens'
 import {
   forgetRememberedChatRoute,
 } from './persistence'
-import { RightDock } from './dock/RightDock'
 import { useRightDock } from './hooks/useRightDock'
 import { insertTextIntoComposer } from './composerInsert'
 import { draftKey, updateComposerDraft } from './composerDraft'
@@ -193,14 +180,6 @@ const SkillCenter = lazy(() => import('./SkillCenter').then((module) => ({
 
 const McpCenter = lazy(() => import('./McpCenter').then((module) => ({
   default: module.McpCenter,
-})))
-
-const KnowledgeCenter = lazy(() => import('./KnowledgeCenter').then((module) => ({
-  default: module.KnowledgeCenter,
-})))
-
-const NotesCenter = lazy(() => import('./NotesCenter').then((module) => ({
-  default: module.NotesCenter,
 })))
 
 const TasksCenter = lazy(() => import('./scheduledTasks/TasksCenter').then((module) => ({
@@ -343,27 +322,16 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   useChatPerfRenderProbe('Chat', { view: hashPath() })
   useChatPerfLongTaskProbe()
   const extensions = useExtensions()
-  const [dockToolbarHost, setDockToolbarHost] = useState<HTMLDivElement | null>(null)
   const extensionId = extensionIdForPath(useExtensionPath())
   useEffect(() => { void initializeExtensions().catch(() => {}) }, [])
-  const [chatView, setChatView] = useState<ChatView>(() => {
-    const path = hashPath()
-    if (isChatOnboardingRoute(path)) return 'onboarding'
-    if (isChatSettingsPath(path)) return 'settings'
-    if (isChatAssistantCenterPath(path)) return 'assistants'
-    if (isChatSkillCenterPath(path)) return 'skill'
-    if (isChatMcpCenterPath(path)) return 'mcp'
-    if (isChatKnowledgeCenterPath(path)) return 'knowledge'
-    if (isChatReadingPath(path) || path === 'chat/extensions' || path.startsWith('chat/extensions/')) return 'extensions'
-    if (isChatNotesPath(path)) return 'notes'
-    if (isChatMediaPath(path)) return 'media'
-    if (isChatAutomationsPath(path)) return 'automations'
-    if (isChatSchedulesPath(path)) return 'schedules'
-    // 旧 `#chat/sessions`：对话库已迁设置
-    if (isChatSessionCenterPath(path)) return 'settings'
-    if (isChatPluginCenterPath(path)) return 'plugins'
-    return 'conversation'
-  })
+  const [chatView, setChatViewState] = useState<ChatView>(() => resolveMobileChatView(hashPath()))
+  const setChatView = useCallback((update: SetStateAction<ChatView>) => {
+    setChatViewState((current) => {
+      const requested = typeof update === 'function' ? update(current) : update
+      const path = requested === 'conversation' ? 'chat' : `chat/${requested}`
+      return resolveMobileChatView(path)
+    })
+  }, [])
   const tasksLeaveGuardRef = useRef<(() => Promise<boolean>) | null>(null)
   const registerTasksLeaveGuard = useCallback((guard: (() => Promise<boolean>) | null) => {
     tasksLeaveGuardRef.current = guard
@@ -1081,11 +1049,10 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     setSettingsInitialTab('sessions')
     setChatView('settings')
     setHash('#chat/settings')
-  }, [])
+  }, [setChatView])
 
   const {
     syncConversationRoute,
-    syncOnboardingRoute,
     openEmbeddedSettings,
     openChatSettings: handleOpenChatSettings,
     openAssistantCenter,
@@ -1108,7 +1075,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   const handleOnboardingExit = useCallback(() => {
     setChatView('conversation')
     syncConversationRoute(null)
-  }, [syncConversationRoute])
+  }, [setChatView, syncConversationRoute])
 
   const reloadConversation = navigation.reloadConversation
   const handleSelectConversation = navigation.selectConversation
@@ -1196,7 +1163,6 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
       void import('./AssistantCenter')
       void import('./SkillCenter')
       void import('./McpCenter')
-      void import('./KnowledgeCenter')
       void import('./scheduledTasks/TasksCenter')
       void import('./MessageList')
     }, 400)
@@ -1648,22 +1614,6 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
 
 
   useEffect(() => {
-    if (!isTauriRuntime()) return
-    let cancelled = false
-    void getSettingsCached().then((settings) => {
-      if (cancelled) return
-      if (settings.onboardingStatus === 'pending' && !isChatOnboardingRoute(hashPath())) {
-        syncOnboardingRoute()
-      }
-    }).catch((err) => {
-      console.error('Failed to check onboarding status:', err)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [syncOnboardingRoute])
-
-  useEffect(() => {
     let cancelled = false
     let unlisten: (() => void) | undefined
 
@@ -1682,7 +1632,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
       cancelled = true
       unlisten?.()
     }
-  }, [navigation, refreshSidebar, requestTasksLeave])
+  }, [navigation, refreshSidebar, requestTasksLeave, setChatView])
 
   const handleConversationFirstCommit = useCallback((conversationId: string, requestId: number) => {
     window.requestAnimationFrame(() => {
@@ -1970,21 +1920,6 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     effectiveSkillId, enabledSkills, usesChatRuntime, selectedProject?.id,
     selectedProject?.name, selectedSet?.id, sendDisabledReason, sendController,
   ])
-  const activateExtensionConversation = useCallback(async (id: string | null) => {
-    if (!id) { navigation.resetRouteConversation(); return }
-    // The navigation owner loads and restores the same stream; keep the extension route.
-    await navigation.loadEmbeddedConversation(id)
-  }, [navigation])
-  const createExtensionConversation = useCallback(async (name: string) => {
-    const { activeProviderId, activeModel } = newConversationDefaultsRef.current
-    const conversation = await chatApi.createConversation(activeProviderId || undefined, activeModel || undefined)
-    await chatApi.setAgentRuntime(conversation.id, BUILTIN_AGENT_RUNTIME)
-    const updated = await chatApi.updateConversation(conversation.id, { title: name })
-    refreshSidebar()
-    return updated
-  }, [refreshSidebar])
-  const sendExtensionMessage = useCallback((conversation: Conversation, content: string, attachments: PendingAttachment[], onAccepted?: () => void) =>
-    handleSendMessage(content, attachments, { conversationOverride: conversation, embedded: true, onAccepted }), [handleSendMessage])
   // 历史预置（Lens「在 AI 客户端继续」交接）：用最新 reactive 值（provider/model/project）创建带历史的新会话。
   // 插件市场“使用”：新建对话并发出开场消息；原有单入口插件仍兼容 Skill 绑定。
   // Skill 由会话的 activeSkillId 决定（后端在对话初始化时发现技能），不依赖本地 skills 列表是否已刷新。
@@ -2927,7 +2862,6 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
           onNewConversation={handleTitlebarNewConversation}
           dockVisible={showConversationDock && dockOpen}
           dockWidth={dock.width}
-          dockToolbarRef={setDockToolbarHost}
         >
           {chatView === 'conversation' ? conversationTitlebarControls : null}
         </ChatTitlebar>
@@ -3029,47 +2963,12 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
               />
             </Suspense>
           </div>
-        ) : chatView === 'knowledge' ? (
-          <div key="center" className={centerPageClass}>
-            {centerPageTopStrip}
-            <Suspense fallback={null}>
-              <KnowledgeCenter />
-            </Suspense>
-          </div>
         ) : chatView === 'media' ? (
           <div key="center" className={worksPageClass}>
             {centerPageTopStrip}
             <MediaStation onOpenSettings={handleOpenChatSettings} />
           </div>
-        ) : chatView === 'extensions' || chatView === 'reading' ? (
-          <div key="center" className="chat-center-page relative flex min-h-0 min-w-0 flex-1 flex-col">
-            <ExtensionCenter heading={<PluginCenterHeading value="extensions" onChange={handleSidebarOpenExtensionsItem} />} id={extensionId} onOpen={id => handleSidebarOpenExtensionsItem(`extension:${id}`)} host={{
-              headerControls: usesNativeTitlebar && sidebarCollapsed ? (
-                <div className={`chat-titlebar-row ${chatTitlebarRowClass} ${chatTitlebarMacInsetClass} chat-titlebar-row--collapsed-mac`} data-tauri-drag-region>
-                  <ChatTitlebarActions
-                    sidebarExpanded={false}
-                    onToggleSidebar={() => setSidebarCollapsedPersisted(false)}
-                    onNewConversation={() => void handleNewConversation()}
-                  />
-                </div>
-              ) : undefined,
-              inputBarProps,
-              messageListProps,
-              onCreateConversation: createExtensionConversation,
-              onActivateConversation: activateExtensionConversation,
-              onSend: sendExtensionMessage,
-              selectedModel: { providerId: activeProviderId, model: activeModel },
-              modelControls: <ModelSelector portal currentProviderId={activeProviderId} currentModel={activeModel} onModelChange={handleModelChange} />,
-            }} />
-          </div>
-        ) : chatView === 'notes' ? (
-          <div key="center" className={centerPageClass}>
-            {centerPageTopStrip}
-            <Suspense fallback={null}>
-              <NotesCenter />
-            </Suspense>
-          </div>
-        ) : chatView === 'schedules' || chatView === 'automations' ? (
+        ) : chatView === 'schedules' ? (
           <div key="center" className={centerPageClass}>
             {centerPageTopStrip}
             <Suspense fallback={null}>
@@ -3158,30 +3057,6 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
           />
         )}
         </ChatRouteKeepAlive>
-        {showConversationDock && (
-          <RightDock
-            open={dockOpen}
-            toolbarHost={usesNativeTitlebar ? null : dockToolbarHost}
-            width={dock.width}
-            activeTab={dock.tab}
-            openTabRequest={dock.openTabRequest}
-            workdir={dockWorkdir}
-            lang={uiLang}
-            conversationId={currentConversation?.id ?? null}
-            treeExpanded={dock.treeExpanded}
-            revealRequest={dock.reveal}
-            previewRequest={dock.preview}
-            subagent={dock.subagent.selection}
-            onBackFromSubagent={dock.subagent.close}
-            onToggleTab={dock.setTab}
-            onOpenTabRequestHandled={dock.onOpenTabRequestHandled}
-            onWidthChange={dock.setWidth}
-            onClose={dock.close}
-            onTreeExpandedChange={dock.setTreeExpanded}
-            onInsertMention={dock.insertMention}
-            onRevealInTree={dock.revealInTree}
-          />
-        )}
       </div>
       {popoutNotice && (
         <div className="pointer-events-none absolute bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-lg bg-neutral-900/90 px-3 py-1.5 text-[12px] text-neutral-50 shadow-lg">

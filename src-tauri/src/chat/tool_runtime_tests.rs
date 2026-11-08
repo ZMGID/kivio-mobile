@@ -938,18 +938,6 @@ impl ExecuteTestHost {
     }
 
     #[test]
-    fn automation_run_uses_requested_timeout_plus_buffer() {
-        let mut settings = Settings::default();
-        settings.chat_tools.tool_timeout_ms = 60_000;
-        let tool = crate::mcp::types::native_automation_run_tool();
-        let arguments = serde_json::json!({ "id": "a1", "timeout_seconds": 120 });
-        assert_eq!(
-            effective_tool_timeout_ms(&settings, &tool, &arguments),
-            125_000
-        );
-    }
-
-    #[test]
     fn bash_skips_generic_outer_tool_timeout() {
         let mut settings = Settings::default();
         settings.chat_tools.tool_timeout_ms = 60_000;

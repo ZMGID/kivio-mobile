@@ -549,6 +549,7 @@ impl crate::chat::agent::AgentHost for ProbeAgentHost<'_> {
     }
 }
 
+#[cfg(debug_assertions)]
 impl crate::chat::tool_runtime::ApplicationHost for ProbeAgentHost<'_> {
     fn start_speculation(
         &self,

@@ -133,10 +133,10 @@ pub async fn shutdown() {
     }
 }
 
-// Native packages are compiled into the trusted desktop binary; register them here.
-pub fn owns_command(command: &str) -> bool {
-    command.starts_with("reading_")
+// Study is not a mobile entry point. Reading commands stay out of the invoke path.
+pub fn owns_command(_command: &str) -> bool {
+    false
 }
-pub fn invoke(invoke: tauri::ipc::Invoke<tauri::Wry>) -> bool {
-    crate::reading::invoke(invoke)
+pub fn invoke(_invoke: tauri::ipc::Invoke<tauri::Wry>) -> bool {
+    false
 }

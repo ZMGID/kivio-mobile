@@ -1,8 +1,8 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { api, type Settings } from '../api/tauri'
 import { getSettingsCached, getSettingsSnapshotCached, saveSettingsSnapshotCached } from '../api/settingsCache'
-import { makeProvider, makeSettings } from '../settings/tabs/testFixtures'
+import { makeSettings } from '../settings/tabs/testFixtures'
 import { chatApi } from './api'
 import Chat from './Chat'
 
@@ -18,9 +18,7 @@ vi.mock('../api/settingsCache', async original => ({
 
 afterEach(() => { vi.restoreAllMocks(); window.localStorage.clear() })
 
-it('refreshes the chat draft from the saved setup before the first conversation', async () => {
-  // Settings reads/writes and native event transport are external seams; the wizard,
-  // completion handler, chat draft and model selector remain real.
+it('opens the chat composer instead of the desktop setup wizard', async () => {
   for (const key of Object.keys(api) as Array<keyof typeof api>) {
     if (key.startsWith('on') && typeof api[key] === 'function') vi.spyOn(api, key).mockResolvedValue(() => {})
   }
@@ -31,29 +29,21 @@ it('refreshes the chat draft from the saved setup before the first conversation'
   vi.spyOn(chatApi, 'getSets').mockResolvedValue([])
   vi.spyOn(chatApi, 'getAssistants').mockResolvedValue([])
   vi.spyOn(chatApi, 'getConversationPins').mockResolvedValue({})
-  const initial = makeSettings({ settingsLanguage: 'zh', chat: {} as Settings['chat'], chatModel: 'stale-chat-model' })
-  let cached = initial
-  const binding = { providerId: 'p1', model: 'configured-chat-model' }
-  const configured = {
-    ...initial,
-    providers: [makeProvider({ enabledModels: [binding.model], availableModels: [binding.model] })],
-    translatorProviderId: binding.providerId, translatorModel: binding.model,
-    chatProviderId: '', chatModel: '',
-    lens: { ...initial.lens, ...binding },
-    screenshotTranslation: { ...initial.screenshotTranslation, ...binding },
-  }
-  vi.mocked(getSettingsCached).mockImplementation(async () => cached)
-  vi.mocked(getSettingsSnapshotCached).mockResolvedValue({ settings: configured, version: { epoch: 'test', revision: 1 } })
-  vi.mocked(saveSettingsSnapshotCached).mockImplementation(async settings => {
-    cached = settings
-    return { settings, version: { epoch: 'test', revision: 2 } }
+  const initial = makeSettings({
+    settingsLanguage: 'zh',
+    onboardingStatus: 'pending',
+    chat: {} as Settings['chat'],
+    chatModel: 'stale-chat-model',
   })
+  vi.mocked(getSettingsCached).mockResolvedValue(initial)
+  vi.mocked(getSettingsSnapshotCached).mockResolvedValue({ settings: initial, version: { epoch: 'test', revision: 1 } })
+  vi.mocked(saveSettingsSnapshotCached).mockResolvedValue({ settings: initial, version: { epoch: 'test', revision: 1 } })
   window.history.replaceState(null, '', '#chat/onboarding')
   render(<Chat onSettingsChange={() => {}} />)
-  fireEvent.click(await screen.findByRole('button', { name: '开始配置' }))
-  for (let step = 0; step < 3; step++) fireEvent.click(screen.getByRole('button', { name: '下一步' }))
-  await act(async () => { fireEvent.click(screen.getByRole('button', { name: '开始使用 Kivio Desktop' })) })
-  await waitFor(() => expect(screen.getByRole('button', { name: binding.model })).toBeInTheDocument())
-  expect(screen.queryByRole('button', { name: initial.chatModel })).not.toBeInTheDocument()
-  expect(cached.onboardingStatus).toBe('completed')
+  expect(await screen.findByRole('textbox', { name: '有问题尽管问…' })).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: '开始配置' })).not.toBeInTheDocument()
+  expect(screen.queryByText('欢迎使用 Kivio Desktop')).not.toBeInTheDocument()
+  expect(screen.queryByText('外部 CLI 代理')).not.toBeInTheDocument()
+  expect(screen.queryByText('笔记与知识库')).not.toBeInTheDocument()
+  expect(screen.queryByText('Lens 与翻译')).not.toBeInTheDocument()
 })

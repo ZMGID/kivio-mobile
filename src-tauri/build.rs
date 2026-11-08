@@ -31,6 +31,10 @@ fn main() {
         let data: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&manifest).unwrap()).expect("extension manifest");
         let id = data["id"].as_str().expect("extension id");
+        // Study is a desktop entry point; the mobile catalog must not ship it.
+        if id == "study" {
+            continue;
+        }
         assert!(data["apiVersion"] == 1, "unsupported extension API: {id}");
         assert!(
             id.starts_with(|c: char| c.is_ascii_lowercase())

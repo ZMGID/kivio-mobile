@@ -48,6 +48,7 @@ pub mod sck;
 pub mod screenshot;
 pub mod self_config;
 pub mod settings;
+#[cfg(not(target_os = "android"))]
 pub mod shortcuts;
 pub mod skills;
 pub mod state;
@@ -62,25 +63,22 @@ pub(crate) mod window_focus;
 pub mod windows;
 #[cfg(target_os = "windows")]
 pub mod windows_ocr;
+mod android_platform;
+#[cfg(test)]
+mod mobile_scope;
 
 use std::time::Duration;
 
 use tauri::{Emitter, Manager, State};
-#[cfg(target_os = "macos")]
-use tauri_plugin_autostart::MacosLauncher;
-use tauri_plugin_single_instance::init as init_single_instance;
 
 use api::build_http_client;
-use commands::initialize_launch_at_startup;
 use native_tools::cleanup_stale_sandbox_exports;
 use screenshot::cleanup_orphan_temp_files;
 use settings::load_settings;
 #[cfg(target_os = "macos")]
 use shortcuts::set_macos_regular_activation_policy;
-use shortcuts::{
-    display_hotkey_errors, hide_chat_window, open_chat_window, open_settings_window_for_activation,
-    register_hotkeys, setup_tray,
-};
+#[cfg(not(target_os = "android"))]
+use shortcuts::{hide_chat_window, open_chat_window};
 use state::AppState;
 use updates::check_github_latest_release;
 #[cfg(target_os = "macos")]
@@ -136,6 +134,7 @@ fn app_context() -> tauri::Context<tauri::Wry> {
 
 /// 应用入口函数
 /// 初始化 Tauri Builder，加载插件，配置窗口事件处理，设置全局状态、热键和托盘
+#[cfg_attr(target_os = "android", tauri::mobile_entry_point)]
 pub fn run() {
     let context = app_context();
     assert_eq!(
@@ -166,34 +165,11 @@ pub fn run() {
     // fix is inherited by the dock PTY, run_command, MCP, and CLI probes.
     path_env::ensure_utf8_locale();
 
-    let autostart_plugin = {
-        #[cfg(target_os = "macos")]
-        {
-            tauri_plugin_autostart::Builder::new()
-                .arg(AUTOSTART_ARG)
-                .macos_launcher(MacosLauncher::LaunchAgent)
-                .build()
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            tauri_plugin_autostart::Builder::new()
-                .arg(AUTOSTART_ARG)
-                .build()
-        }
-    };
-
     tauri::Builder::default()
         .register_uri_scheme_protocol("kivio-preview", |context, request| html_preview::serve(context.app_handle(), request))
-        .plugin(init_single_instance(|app, _args, _cwd| {
-            if let Err(err) = open_settings_window_for_activation(app) {
-                eprintln!("Single-instance activation failed: {err}");
-            }
-        }))
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(autostart_plugin)
         .on_page_load(|webview, payload| {
             if webview.label() == "chat" && payload.event() == tauri::webview::PageLoadEvent::Started {
                 if let Some(voice) = webview.app_handle().try_state::<voice_codex::VoiceCodexService>() {
@@ -212,6 +188,7 @@ pub fn run() {
                     if keep_alive {
                         api.prevent_close();
                         chat::notification_viewing::clear_window(window.label());
+                        #[cfg(not(target_os = "android"))]
                         hide_chat_window(window.app_handle(), window);
                     }
                     return;
@@ -320,6 +297,13 @@ pub fn run() {
             // `conv_*` 目录，非空的孤儿工作区只报数不删（里面是用户产物）。
             chat::gc::sweep_conversation_side_artifacts(app.handle());
 
+            #[cfg(target_os = "android")]
+            {
+                let workspace = app.path().app_data_dir()?.join("workspace");
+                std::fs::create_dir_all(&workspace)?;
+                std::env::set_var("KIVIO_APP_WORKSPACE", &workspace);
+            }
+
             // 周期性回收闲置的持久外部 CLI **进程**（10 分钟无活动即丢弃 → actor 关闭子进程）。
             // 原生会话 id 仍落在 disk 上，下一轮（或重新打开这条对话）必须 resume，不是开新会话。
             {
@@ -348,9 +332,6 @@ pub fn run() {
                 eprintln!("Failed to remove built-in assistants: {err}");
             }
 
-            if let Err(err) = initialize_launch_at_startup(&app.handle(), &mut settings) {
-                eprintln!("Failed to initialize launch-at-startup setting: {err}");
-            }
             // 开机自启带 `--from-autostart` 时不弹窗；用户显式打开「启动后最小化到托盘」时
             // 任何启动路径都不弹（含参数丢失的自启、开始菜单快捷方式）。
             let skip_chat_on_launch =
@@ -402,31 +383,20 @@ pub fn run() {
                     }
                 });
             }
-            // Dock 的 workspace 文件监听服务（文件树 / Git 面板的秒级刷新源）。
-            app.manage(std::sync::Arc::new(dock::watch::WorkspaceWatchService::new(
-                app.handle().clone(),
-            )));
-            // Dock 终端面板的 PTY 会话登记表（会话 drop 时兜底 kill 子进程）。
-            app.manage(std::sync::Arc::new(dock::terminal::TerminalService::new(
-                app.handle().clone(),
-            )));
+            // Dock services stay on desktop. Android has no PTY and no workspace watcher.
+            #[cfg(not(target_os = "android"))]
+            {
+                app.manage(std::sync::Arc::new(dock::watch::WorkspaceWatchService::new(
+                    app.handle().clone(),
+                )));
+                app.manage(std::sync::Arc::new(dock::terminal::TerminalService::new(
+                    app.handle().clone(),
+                )));
+            }
 
             crate::chat::sub_agent::delivery::install(app.handle());
 
-            if let Err(err) = register_hotkeys(&app.handle()) {
-                eprintln!(
-                    "Failed to register hotkeys: {}",
-                    display_hotkey_errors(&err)
-                );
-            }
-            if let Err(err) = desktop_pet::initialize(&app.handle()) {
-                eprintln!("Failed to initialize desktop pet: {err}");
-            }
-            crate::automation::spawn_scheduler(app.handle().clone());
             crate::scheduled_tasks::spawn_scheduler(app.handle().clone());
-            if let Err(err) = setup_tray(&app.handle()) {
-                eprintln!("Failed to setup tray: {err}");
-            }
 
             // 启动后 5s 静默检查更新（settings.auto_check_update 控制）
             // 发现新版 → emit "update-available" 事件，前端 Settings 打开时会展示提示
@@ -495,6 +465,8 @@ pub fn run() {
             // enables/tests a server. Tray startup must not launch tool processes.
 
             // 手动启动默认打开聊天窗口；自启 / 「启动后最小化到托盘」则只留托盘常驻。
+            // Android creates the main window from tauri.android.conf.json.
+            #[cfg(not(target_os = "android"))]
             if !skip_chat_on_launch {
                 let app_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
@@ -503,6 +475,10 @@ pub fn run() {
                         eprintln!("Failed to open chat on launch: {err}");
                     }
                 });
+            }
+            #[cfg(target_os = "android")]
+            {
+                let _ = skip_chat_on_launch;
             }
             #[cfg(target_os = "macos")]
             macos_hang_watchdog::start(app.handle());
@@ -517,8 +493,6 @@ pub fn run() {
             extensions::extensions_set_enabled,
             html_preview::create_html_preview,
             html_preview::release_html_preview,
-            desktop_pet::desktop_pet_get_enabled,
-            desktop_pet::desktop_pet_set_enabled,
             provider_oauth::provider_oauth_start,
             provider_oauth::provider_oauth_poll,
             provider_oauth::provider_oauth_cancel,
@@ -533,12 +507,6 @@ pub fn run() {
             chat::media_station::media_station_read,
             chat::media_station::media_station_export,
             chat::media_station::media_station_reference,
-            voice_live::voice_live_start,
-            voice_live::voice_delegate,
-            voice_codex::voice_codex_reserve,
-            voice_codex::voice_codex_start,
-            voice_codex::voice_codex_stop,
-            voice_codex::voice_codex_mute,
             commands::get_settings,
             windows::chat_window_apply_mica,
             windows::chat_window_set_material_appearance,
@@ -550,7 +518,6 @@ pub fn run() {
             commands::get_default_prompt_templates,
             commands::save_settings,
             commands::set_favorite_models,
-            commands::set_translate_card_size,
             backup::webdav::webdav_load,
             backup::webdav::webdav_save,
             backup::webdav::webdav_test,
@@ -568,54 +535,19 @@ pub fn run() {
             commands::export_settings,
             commands::import_settings,
             commands::open_settings_window,
-            commands::close_translator_window,
-            commands::resolve_translation_target_lang,
-            commands::translate_text,
-            commands::commit_translation,
             commands::open_external,
             commands::open_local_file,
             commands::open_data_url_file,
             commands::open_html_preview,
             html_preview::open_html_render,
-            lens_commands::explain_read_image,
-            lens_commands::lens_read_freeze_frame,
-            lens_commands::lens_read_image,
             commands::fetch_models,
             commands::test_provider_connection,
             commands::test_web_search,
             commands::get_permission_status,
             commands::open_permission_settings,
-            lens_commands::lens_list_windows,
-            lens_commands::lens_capture_window,
-            lens_commands::lens_capture_region,
-            lens_commands::lens_register_annotated_image,
-            lens_commands::lens_copy_image_to_clipboard,
-            lens_commands::lens_save_annotated_png,
-            lens_commands::lens_ask,
-            lens_commands::lens_send_to_chat,
-            lens_commands::lens_send_history_to_chat,
-            lens_commands::lens_translate,
-            lens_commands::lens_translate_text,
-            lens_commands::lens_replace_translate,
-            lens_commands::lens_cancel_stream,
-            lens_commands::lens_focus_webview,
-            lens_commands::lens_close,
-            lens_commands::lens_set_escape_guard,
-            lens_commands::lens_take_reset_payload,
-            lens_commands::lens_set_floating,
-            lens_commands::lens_animate_floating,
-            commands::take_lens_selection,
-            lens_commands::lens_commit_image_to_history,
-            lens_commands::lens_delete_history_image,
             updates::check_github_latest_release,
             chat::model_database::get_model_database,
             chat::model_database::update_model_database,
-            updates::download_update_asset,
-            updates::install_update_and_quit,
-            commands::rapidocr_status,
-            commands::rapidocr_install,
-            commands::replace_translation_pack_status,
-            commands::replace_translation_pack_install,
             usage::usage_get_stats,
             usage::usage_get_conversation_cost,
             usage::usage_clear,
@@ -623,10 +555,6 @@ pub fn run() {
             chat::commands::interaction::clear_request_debug_records,
             chat::protocol::chat_sync_state,
             chat::protocol::chat_protocol_subscribe,
-            chat::popout::chat_open_conversation_popout,
-            chat::popout::chat_focus_conversation_popout,
-            chat::popout::chat_close_conversation_popout,
-            chat::popout::chat_list_conversation_popouts,
             // Chat 模块命令
             chat::commands::catalog::chat_get_conversations,
             chat::commands::interaction::chat_list_background_tasks,
@@ -725,57 +653,12 @@ pub fn run() {
             chat::commands::mutations::chat_regenerate_message,
             chat::commands::mutations::chat_rewind_to_message,
             chat::commands::mutations::chat_fork_conversation,
-            external_agents::commands::chat_detect_external_agents,
-            external_agents::commands::chat_detect_external_agent_models,
-            external_agents::commands::chat_external_cli_account,
-            external_agents::commands::chat_list_external_cli_slash_commands,
-            external_agents::commands::chat_external_cli_pi_agent_dir,
-            external_agents::commands::chat_external_cli_scan_cc_switch,
-            external_agents::commands::chat_external_cli_import_cc_switch,
-            external_agents::commands::chat_external_cli_fetch_relay_models,
-            external_agents::installer::chat_external_cli_install_info,
-            external_agents::installer::chat_external_cli_install,
-            external_agents::installer::chat_external_cli_open_config_dir,
-            external_agents::pi_extensions::chat_pi_extensions_inventory,
-            external_agents::pi_extensions::chat_pi_extension_set_enabled,
-            external_agents::pi_extensions::chat_pi_extension_install,
-            external_agents::pi_extensions::chat_pi_extension_update,
-            external_agents::pi_extensions::chat_pi_extension_remove,
-            external_agents::pi_extensions::chat_pi_extension_open,
-            external_agents::pi_extensions::chat_pi_extensions_open_dir,
-            external_agents::pi_skills::chat_pi_skills_inventory,
-            external_agents::pi_skills::chat_pi_skill_set_enabled,
-            external_agents::pi_skills::chat_pi_skill_commands_set_enabled,
-            external_agents::pi_skills::chat_pi_skill_add_path,
-            external_agents::pi_skills::chat_pi_skill_remove_path,
-            external_agents::pi_skills::chat_pi_skill_remove,
-            external_agents::pi_skills::chat_pi_skill_open,
-            external_agents::pi_skills::chat_pi_skills_open_dir,
-            external_agents::dsh_plugins::chat_dsh_plugin_settings_get,
-            external_agents::dsh_plugins::chat_dsh_plugin_settings_save,
-            external_agents::dsh_plugins::chat_dsh_plugin_inventory,
-            external_agents::dsh_plugins::chat_dsh_open_settings_file,
-            external_agents::dsh_plugins::chat_dsh_official_credential_status,
-            external_agents::dsh_plugins::chat_dsh_official_credential_save,
-            external_agents::dsh_plugins::chat_dsh_native_provider_get,
-            external_agents::dsh_plugins::chat_dsh_native_provider_delete,
-            external_agents::dsh_profile::chat_dsh_list_agent_presets,
-            external_agents::commands::chat_set_agent_runtime,
-            external_agents::commands::chat_list_importable_cli_sessions,
-            external_agents::commands::chat_import_cli_sessions,
-            external_agents::commands::chat_imported_history_stale,
-            external_agents::commands::chat_external_native_session_id,
             chat::memory::chat_memory_get,
             chat::memory::chat_memory_save,
             chat::memory::chat_memory_open_folder,
             mcp::registry::chat_mcp_list_tools,
             mcp::registry::chat_mcp_test_server,
-            computer_control::computer_control_check,
-            computer_control::computer_control_status,
-            computer_control::computer_control_install,
-            computer_control::computer_control_update,
             mcp::registry::chat_mcp_import_json,
-            mcp::registry::chat_cli_import_scan,
             mcp::registry::chat_mcp_server_status,
             mcp::registry::chat_mcp_list_tool_defs,
             mcp::registry::chat_mcp_reload_server,
@@ -805,31 +688,6 @@ pub fn run() {
             plugins::plugins_run_official_install,
             plugins::plugins_set_enabled,
             plugins::plugins_uninstall,
-            notes::notes_list,
-            notes::notes_read,
-            notes::notes_create,
-            notes::notes_update,
-            notes::notes_delete,
-            notes::notes_folders_list,
-            notes::notes_folder_create,
-            notes::notes_folder_rename,
-            notes::notes_folder_delete,
-            notes::notes_open_folder,
-            notes::notes_dir_path,
-            automation::commands::automation_list,
-            automation::commands::automation_get,
-            automation::commands::automation_save,
-            automation::commands::automation_delete,
-            automation::commands::automation_set_enabled,
-            automation::commands::automation_run,
-            automation::commands::automation_test_node,
-            automation::commands::automation_validate,
-            automation::commands::automation_cancel,
-            automation::commands::automation_active_run,
-            automation::commands::automation_export,
-            automation::commands::automation_import,
-            automation::commands::automation_runs_list,
-            automation::commands::automation_run_get,
             scheduled_tasks::commands::scheduled_tasks_snapshot,
             scheduled_tasks::commands::scheduled_task_save,
             scheduled_tasks::commands::scheduled_task_delete,
@@ -845,53 +703,6 @@ pub fn run() {
             skills::chat_skills_uninstall,
             skills::chat_skills_install_from_url,
             skills::chat_skills_open_folder,
-            chat::knowledge_base::commands::kb_list_libraries,
-            chat::knowledge_base::commands::kb_create_library,
-            chat::knowledge_base::commands::kb_rename_library,
-            chat::knowledge_base::commands::kb_delete_library,
-            chat::knowledge_base::commands::kb_list_documents,
-            chat::knowledge_base::commands::kb_delete_document,
-            chat::knowledge_base::commands::kb_retrieval_test,
-            chat::knowledge_base::ingest::kb_upload_document,
-            chat::knowledge_base::ingest::kb_import_url,
-            chat::knowledge_base::ingest::kb_reindex_library,
-            chat::knowledge_base::ingest::kb_update_embedding,
-            chat::knowledge_base::ingest::kb_set_embed_batch_size,
-            // Dock 模块命令（右侧文件树 + Git 面板 + 终端面板 + workspace 监听）
-            dock::dock_resolve_cwd,
-            dock::fs::dock_fs_list,
-            dock::fs::dock_fs_search,
-            dock::fs::dock_fs_read,
-            dock::fs::dock_project_icon,
-            dock::fs::dock_fs_write,
-            dock::fs::dock_fs_create,
-            dock::fs::dock_fs_rename,
-            dock::fs::dock_fs_move,
-            dock::fs::dock_fs_delete,
-            dock::fs::dock_fs_open_path,
-            dock::git::dock_git_status,
-            dock::git::dock_git_snapshot,
-            dock::git::dock_git_diff,
-            dock::git::dock_git_log,
-            dock::git::dock_git_commit_diff,
-            dock::git::dock_git_branches,
-            dock::git::dock_git_stage,
-            dock::git::dock_git_stage_all,
-            dock::git::dock_git_unstage,
-            dock::git::dock_git_unstage_all,
-            dock::git::dock_git_discard,
-            dock::git::dock_git_discard_all,
-            dock::git::dock_git_commit,
-            dock::git::dock_git_switch_branch,
-            dock::git::dock_git_create_branch,
-            dock::git::dock_git_init,
-            dock::git::dock_git_diff_stat,
-            dock::git::dock_git_add_to_gitignore,
-            dock::watch::dock_workspace_watch_set,
-            dock::terminal::dock_terminal_create,
-            dock::terminal::dock_terminal_write,
-            dock::terminal::dock_terminal_resize,
-            dock::terminal::dock_terminal_close,
         ];
             handler(invoke)
         })

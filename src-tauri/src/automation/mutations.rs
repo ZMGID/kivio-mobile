@@ -34,7 +34,12 @@ pub(super) fn set_enabled(app: &AppHandle, id: &str, enabled: bool) -> Result<Au
 }
 
 fn refresh_hotkeys(app: &AppHandle) {
+    #[cfg(not(target_os = "android"))]
     if let Err(err) = crate::shortcuts::register_hotkeys(app) {
         let _ = app.emit("hotkey-warning", err);
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = app;
     }
 }

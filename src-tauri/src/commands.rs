@@ -2,9 +2,9 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use arboard::Clipboard;
 use base64::Engine as _;
 use tauri::{AppHandle, Manager, State};
+#[cfg(not(target_os = "android"))]
 use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_shell::ShellExt;
 
@@ -25,6 +25,7 @@ use crate::settings::{
 };
 #[cfg(target_os = "macos")]
 use crate::shortcuts::{check_accessibility, check_screen_recording_permission};
+#[cfg(not(target_os = "android"))]
 use crate::shortcuts::{
     open_chat_settings_window as open_settings_window_impl, register_hotkeys_for_settings,
     restore_runtime_settings, send_paste_shortcut, setup_tray,
@@ -33,6 +34,7 @@ use crate::state::AppState;
 use crate::utils::{language_name, resolve_target_lang};
 use crate::windows::get_translator_window;
 
+#[cfg(not(target_os = "android"))]
 pub(crate) fn apply_launch_at_startup(app: &AppHandle, enabled: bool) -> Result<(), String> {
     let auto_launch = app.autolaunch();
     let current = auto_launch.is_enabled().map_err(|e| e.to_string())?;
@@ -46,6 +48,11 @@ pub(crate) fn apply_launch_at_startup(app: &AppHandle, enabled: bool) -> Result<
     Ok(())
 }
 
+#[cfg(target_os = "android")]
+pub(crate) fn apply_launch_at_startup(_app: &AppHandle, _enabled: bool) -> Result<(), String> {
+    Ok(())
+}
+
 /// Windows owns the effective startup state (including Task Manager overrides).
 /// Only an explicit preference change may write it; unrelated saves must not
 /// undo the user's OS-level choice. Other platforms retain their existing policy.
@@ -53,6 +60,7 @@ pub(crate) fn should_apply_launch_at_startup(previous: Option<bool>, enabled: bo
     !cfg!(target_os = "windows") || previous.is_some_and(|previous| previous != enabled)
 }
 
+#[cfg(not(target_os = "android"))]
 pub(crate) fn initialize_launch_at_startup(
     app: &AppHandle,
     settings: &mut Settings,
@@ -207,12 +215,14 @@ async fn apply_settings(
         .external_live_sessions()
         .prepare_settings_change(&profile_agents, profile_keys)
         .await?;
+    #[cfg(not(target_os = "android"))]
     if should_apply_launch_at_startup(
         Some(previous_settings.launch_at_startup),
         sanitized.launch_at_startup,
     ) {
         apply_launch_at_startup(app, sanitized.launch_at_startup)?;
     }
+    #[cfg(not(target_os = "android"))]
     if crate::shortcuts::hotkey_bindings_changed(&previous_settings, &sanitized) {
         if let Err(err) = register_hotkeys_for_settings(app, &sanitized) {
             // 热键被系统/其他应用占用不该阻断保存——能注册的已注册,失败的作为警告推给前端,
@@ -236,6 +246,7 @@ async fn apply_settings(
         )
         .await
         {
+            #[cfg(not(target_os = "android"))]
             restore_runtime_settings(app, state);
             return Err(format!("Failed to migrate conversation workspaces: {err}").into());
         }
@@ -273,6 +284,7 @@ async fn apply_settings(
                     );
                 }
             }
+            #[cfg(not(target_os = "android"))]
             restore_runtime_settings(app, state);
             return Err(err);
         }
@@ -284,10 +296,12 @@ async fn apply_settings(
         .provider_runtime()
         .sync_preferred_api_keys(&previous_settings, &committed.settings);
 
+    #[cfg(not(target_os = "android"))]
     if previous_settings.keep_chat_window_alive && !committed.settings.keep_chat_window_alive {
         crate::shortcuts::destroy_hidden_chat_window(app);
     }
 
+    #[cfg(not(target_os = "android"))]
     if previous_settings.settings_language != committed.settings.settings_language
         || app.tray_by_id("main").is_none()
     {
@@ -482,7 +496,15 @@ pub(crate) async fn import_settings(
 
 #[tauri::command]
 pub(crate) fn open_settings_window(app: AppHandle) -> Result<(), String> {
-    open_settings_window_impl(&app)
+    #[cfg(not(target_os = "android"))]
+    {
+        return open_settings_window_impl(&app);
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = app;
+        Ok(())
+    }
 }
 
 #[tauri::command]
@@ -496,8 +518,10 @@ pub(crate) fn close_translator_window(app: AppHandle, _state: State<'_, AppState
                 _state.frontmost_apps().translator(),
             );
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
         let _ = window.close();
+        #[cfg(target_os = "android")]
+        let _ = window;
     }
 }
 
@@ -564,8 +588,15 @@ pub(crate) async fn commit_translation(
     }
 
     let auto_paste = state.settings_read().auto_paste;
-    let mut clipboard = Clipboard::new().map_err(|e| e.to_string())?;
-    clipboard.set_text(text).map_err(|e| e.to_string())?;
+    #[cfg(not(target_os = "android"))]
+    {
+        let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+        clipboard.set_text(&text).map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = &text;
+    }
 
     // commit 用下面的 [NSApp hide:] 把前台让回原 App（成熟路径）。先清掉翻译窗的前台快照，
     // 避免后续窗口事件再次驱动焦点交还。
@@ -579,11 +610,13 @@ pub(crate) async fn commit_translation(
         crate::windows::destroy_overlay_window(&window);
     }
 
-    // 其他平台没有 macOS TSM/IMK 的销毁问题，保持原有的关闭释放行为。
-    #[cfg(not(target_os = "macos"))]
+    // 其他桌面平台没有 macOS TSM/IMK 的销毁问题，保持原有的关闭释放行为。
+    #[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
     if let Some(window) = get_translator_window(&app) {
         let _ = window.close();
     }
+    #[cfg(target_os = "android")]
+    let _ = &app;
 
     // 让前台还给原 App。[NSApp hide:] 是 AppKit，只能主线程调用。
     #[cfg(target_os = "macos")]
@@ -592,6 +625,7 @@ pub(crate) async fn commit_translation(
     if auto_paste {
         // 增加延迟以确保焦点切换完成
         tokio::time::sleep(Duration::from_millis(600)).await;
+        #[cfg(not(target_os = "android"))]
         send_paste_shortcut();
     }
 
@@ -616,7 +650,15 @@ pub(crate) fn open_external(app: AppHandle, url: String) -> Result<(), String> {
         return Err("Invalid URL".to_string());
     }
 
-    app.shell().open(url, None).map_err(|e| e.to_string())
+    #[cfg(target_os = "android")]
+    {
+        let _ = app;
+        return crate::android_platform::open_http_url(&url);
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        app.shell().open(url, None).map_err(|e| e.to_string())
+    }
 }
 
 /// 模型输出里的本地文件链接**禁止**打开的扩展名。

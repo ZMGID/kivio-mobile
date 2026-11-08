@@ -540,6 +540,13 @@ async fn execute_delay(app: &AppHandle, run_id: &str, node: &FlowNode) -> Result
 }
 
 fn execute_clipboard(node: &FlowNode, prev: &NodeOutput) -> Result<NodeOutput, String> {
+    #[cfg(target_os = "android")]
+    {
+        let _ = (node, prev);
+        return Err("clipboard is unavailable on Android".to_string());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
     let clipboard = node.data.get("clipboard").cloned().unwrap_or(Value::Null);
     let op = clipboard
         .get("op")
@@ -556,6 +563,7 @@ fn execute_clipboard(node: &FlowNode, prev: &NodeOutput) -> Result<NodeOutput, S
     );
     board.set_text(&text).map_err(|err| err.to_string())?;
     Ok(NodeOutput::from_text(text))
+    }
 }
 
 fn execute_file(

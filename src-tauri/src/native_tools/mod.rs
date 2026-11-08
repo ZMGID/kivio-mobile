@@ -133,7 +133,29 @@ pub fn default_working_directory(working_directory: &str) -> Result<PathBuf, Str
     } else {
         configured
     })?;
-    fs_canonicalize_existing_or_self(&root)
+    let resolved = fs_canonicalize_existing_or_self(&root)?;
+    #[cfg(target_os = "android")]
+    {
+        let roots = crate::android_platform::granted_workspace_roots();
+        if crate::android_platform::confine_to_granted_roots(&resolved, &roots).is_ok() {
+            return Ok(resolved);
+        }
+        if let Some(workspace) = std::env::var("KIVIO_APP_WORKSPACE")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+        {
+            return crate::android_platform::confine_to_granted_roots(
+                Path::new(&workspace),
+                &roots,
+            );
+        }
+        return Err("working directory is outside granted workspace roots".to_string());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Ok(resolved)
+    }
 }
 
 /// Keep existing per-chat files in place; new chats share the configured directory.
@@ -196,6 +218,25 @@ pub fn resolve_tool_write_path(
 }
 
 fn resolve_tool_path(
+    workspace: &NativeToolWorkspace,
+    raw_path: &str,
+    allow_missing: bool,
+) -> Result<PathBuf, String> {
+    let resolved = resolve_tool_path_unconfined(workspace, raw_path, allow_missing)?;
+    #[cfg(target_os = "android")]
+    {
+        crate::android_platform::confine_to_granted_roots(
+            &resolved,
+            &crate::android_platform::granted_workspace_roots(),
+        )
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Ok(resolved)
+    }
+}
+
+fn resolve_tool_path_unconfined(
     workspace: &NativeToolWorkspace,
     raw_path: &str,
     allow_missing: bool,

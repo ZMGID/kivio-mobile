@@ -120,6 +120,12 @@ pub(crate) async fn chat_save_pasted_attachment(
 /// 读取系统剪贴板中的文件路径（Finder / 资源管理器复制文件）。
 #[tauri::command]
 pub(crate) fn chat_read_clipboard_files() -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    {
+        return Err("clipboard is unavailable on Android".to_string());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
     use arboard::Clipboard;
 
     let mut clipboard = Clipboard::new().map_err(|e| format!("读取剪贴板失败: {e}"))?;
@@ -143,6 +149,7 @@ pub(crate) fn chat_read_clipboard_files() -> Result<serde_json::Value, String> {
         "success": true,
         "files": files,
     }))
+    }
 }
 
 #[tauri::command]
@@ -172,6 +179,11 @@ fn has_spreadsheet_clipboard_text(text: &str, html: &str) -> bool {
 /// results also carry text/HTML so the composer can prefer spreadsheet cells.
 #[tauri::command]
 pub(crate) async fn chat_read_clipboard() -> Result<Value, String> {
+    #[cfg(target_os = "android")]
+    {
+        return Err("clipboard is unavailable on Android".to_string());
+    }
+    #[cfg(not(target_os = "android"))]
     tauri::async_runtime::spawn_blocking(|| {
         use base64::Engine;
         use image::{ExtendedColorType, ImageEncoder};
@@ -224,8 +236,16 @@ pub(crate) async fn chat_read_clipboard() -> Result<Value, String> {
 
 #[tauri::command]
 pub(crate) fn chat_write_clipboard_text(text: String) -> Result<(), String> {
-    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-    clipboard.set_text(text).map_err(|e| e.to_string())
+    #[cfg(target_os = "android")]
+    {
+        let _ = text;
+        return Err("clipboard is unavailable on Android".to_string());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+        clipboard.set_text(text).map_err(|e| e.to_string())
+    }
 }
 
 #[cfg(test)]

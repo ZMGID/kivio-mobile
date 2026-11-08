@@ -94,7 +94,14 @@ pub fn sync_macos_activation_policy(app: &AppHandle) {
 pub fn close_popout_for_conversation(app: &AppHandle, conversation_id: &str) {
     let label = popout_label(conversation_id);
     if let Some(window) = app.get_webview_window(&label) {
-        let _ = window.destroy();
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = window.destroy();
+        }
+        #[cfg(target_os = "android")]
+        {
+            let _ = window;
+        }
     }
 }
 
@@ -117,9 +124,12 @@ pub fn protocol_filter_for_window(
 fn reveal_popout(app: &AppHandle, window: &WebviewWindow) {
     crate::windows::apply_chat_window_chrome(window);
     crate::windows::normalize_chat_window_behavior(window);
-    let _ = window.unminimize();
-    let _ = window.show();
-    let _ = window.set_focus();
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
     #[cfg(target_os = "macos")]
     {
         let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
@@ -186,6 +196,7 @@ pub async fn chat_close_conversation_popout(
     conversation_id: String,
 ) -> Result<(), String> {
     close_popout_for_conversation(&app, &conversation_id);
+    #[cfg(not(target_os = "android"))]
     if let Some(chat) = app.get_webview_window("chat") {
         let _ = chat.unminimize();
         let _ = chat.show();

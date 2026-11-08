@@ -79,3 +79,14 @@ src/data/modelDatabase.json.source.json
 
 # Built Word task pane (npm run build:word)
 /src-tauri/resources/word/
+
+# Android project build outputs and this machine's SDK path
+src-tauri/gen/android/local.properties
+src-tauri/gen/android/.gradle/
+src-tauri/gen/android/build/
+src-tauri/gen/android/app/build/
+src-tauri/gen/android/app/src/main/jniLibs/**/*.so
+src-tauri/gen/android/app/src/main/assets/skills/
+src-tauri/gen/android/app/src/main/assets/plugins/
+src-tauri/gen/android/app/src/main/assets/licenses/
+src-tauri/gen/android/app/src/main/assets/tauri.conf.json

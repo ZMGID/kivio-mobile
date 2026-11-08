@@ -20,6 +20,7 @@ pub use crate::offline_models::OcrModelTier as ModelTier;
 use crate::offline_models::{init_ort_from_model_dir, OfflineModelManager};
 #[cfg(not(test))]
 use crate::proc::NoConsoleWindow;
+#[cfg(not(target_os = "android"))]
 use oar_ocr::oarocr::{OAROCRBuilder, OAROCR};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -278,6 +279,18 @@ pub fn run_worker_entry(mut args: impl Iterator<Item = OsString>) -> ExitCode {
     exit_code
 }
 
+#[cfg(target_os = "android")]
+fn run_worker_body(
+    model_dir: &Path,
+    image_path: &Path,
+    tier: ModelTier,
+    mode: WorkerMode,
+) -> Result<WorkerResponse, String> {
+    let _ = (model_dir, image_path, tier, mode);
+    Err("RapidOCR is not available on Android".into())
+}
+
+#[cfg(not(target_os = "android"))]
 fn run_worker_body(
     model_dir: &Path,
     image_path: &Path,
@@ -313,6 +326,7 @@ fn model_paths(model_dir: &Path, tier: ModelTier) -> (PathBuf, PathBuf, PathBuf)
     }
 }
 
+#[cfg(not(target_os = "android"))]
 fn build_pipeline(
     tier: ModelTier,
     det_path: PathBuf,
@@ -435,6 +449,7 @@ impl OcrLine {
 }
 
 /// 从 OCR 原始结果提取带 bbox 的文本块（每个 DBNet 检测框一块）。
+#[cfg(not(target_os = "android"))]
 fn collect_ocr_spans(results: &[oar_ocr::oarocr::OAROCRResult]) -> (Vec<OcrSpan>, Vec<String>) {
     let mut spans = Vec::new();
     let mut fallback = Vec::new();
@@ -486,6 +501,7 @@ fn collect_ocr_spans(results: &[oar_ocr::oarocr::OAROCRResult]) -> (Vec<OcrSpan>
 }
 
 /// 从 OCR 原始结果提取带 bbox 的视觉行（共享几何聚合逻辑）。
+#[cfg(not(target_os = "android"))]
 fn collect_ocr_lines(results: &[oar_ocr::oarocr::OAROCRResult]) -> (Vec<OcrLine>, Vec<String>) {
     let (mut spans, fallback) = collect_ocr_spans(results);
 
@@ -516,6 +532,7 @@ fn collect_ocr_lines(results: &[oar_ocr::oarocr::OAROCRResult]) -> (Vec<OcrLine>
 /// 替换翻译用：返回带坐标的 OCR 文本块（每个检测框一块，不合并同行多列）。
 ///
 /// 表格/多栏布局若按视觉行合并，会把整行合成一个大框；逐块输出才能按单元格原位覆盖。
+#[cfg(not(target_os = "android"))]
 pub fn lines_from_results(results: &[oar_ocr::oarocr::OAROCRResult]) -> Vec<RapidOcrLine> {
     let (mut spans, _) = collect_ocr_spans(results);
     spans.sort_by(|a, b| cmp_f32(a.center_y(), b.center_y()).then(cmp_f32(a.x_min, b.x_min)));
@@ -544,6 +561,7 @@ pub fn lines_from_results(results: &[oar_ocr::oarocr::OAROCRResult]) -> Vec<Rapi
 /// 1. 先按动态行高聚合同一视觉行,避免固定 30px 桶把大/小字号混在一起。
 /// 2. 再按行距和右边界判断软换行/段落断开。
 /// 3. 常见项目符号转成 Markdown list,让前端原文区和翻译模型都更容易理解结构。
+#[cfg(not(target_os = "android"))]
 fn join_text_regions(results: &[oar_ocr::oarocr::OAROCRResult]) -> String {
     let (lines, fallback) = collect_ocr_lines(results);
 

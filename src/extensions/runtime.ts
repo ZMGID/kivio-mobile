@@ -2,16 +2,24 @@ import { useSyncExternalStore } from 'react'
 import { extensionsApi } from '../api/extensions'
 import { EXTENSION_API_VERSION, type ExtensionManifest, type ExtensionModule, type ExtensionPageProps, type ExtensionAPI, type ExtensionHookMap, type HookHandler } from '../../extensions/sdk'
 
+export const EXCLUDED_EXTENSION_IDS = ['study'] as const
+
+export function selectShippedExtensions<T extends { manifest: { id: string } }>(entries: T[]): T[] {
+  const excluded = new Set<string>(EXCLUDED_EXTENSION_IDS)
+  return entries.filter(entry => !excluded.has(entry.manifest.id))
+}
+
 const manifests = import.meta.glob<ExtensionManifest>('../../extensions/*/manifest.json', { eager: true, import: 'default' })
 const loaders = import.meta.glob<{ default: ExtensionModule }>('../../extensions/*/index.tsx')
-export const catalog = Object.entries(manifests).map(([path, manifest]) => {
+const extensionEntries = Object.entries(manifests).map(([path, manifest]) => {
   if (!/^[a-z][a-z0-9-]*$/.test(manifest.id) || manifest.apiVersion !== EXTENSION_API_VERSION)
     throw new Error(`不兼容的扩展：${manifest.id}`)
   const load = loaders[path.replace('manifest.json', 'index.tsx')]
   if (!load) throw new Error(`扩展缺少入口：${manifest.id}`)
   return { manifest, load }
 })
-if (new Set(catalog.map(p => p.manifest.id)).size !== catalog.length) throw new Error('扩展 ID 重复')
+if (new Set(extensionEntries.map(p => p.manifest.id)).size !== extensionEntries.length) throw new Error('扩展 ID 重复')
+export const catalog = selectShippedExtensions(extensionEntries)
 type HostActions = Pick<ExtensionPageProps, 'onCreateConversation' | 'onActivateConversation' | 'onSend'>
 type Instance = {
   boundHost?: { original: HostActions; actions: HostActions }

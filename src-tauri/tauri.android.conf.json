@@ -1,0 +1,20 @@
+{
+  "productName": "Kivio",
+  "build": {
+    "beforeBuildCommand": "npx vite build"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "label": "chat",
+        "title": "Kivio",
+        "url": "index.html#chat",
+        "create": true
+      }
+    ]
+  },
+  "bundle": {
+    "externalBin": []
+  }
+}

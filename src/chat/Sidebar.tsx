@@ -17,7 +17,7 @@ import {
 } from 'lucide-react'
 import type { ChatAssistant, ChatProject, ChatSet, ConversationListItem, ConversationSearchHit } from './types'
 import { HighlightText } from './searchHighlight'
-import { AgentIcon, ComposeIcon, ExtensionsIcon, KnowledgeIcon, MediaIcon, NotesIcon, PluginIcon, TasksIcon, SearchNavIcon } from '../settings/public/icons'
+import { AgentIcon, ComposeIcon, ExtensionsIcon, MediaIcon, PluginIcon, TasksIcon, SearchNavIcon } from '../settings/public/icons'
 import { ConversationList } from './ConversationList'
 import { useScheduledTasks } from './scheduledTasks/useScheduledTasks'
 import { ChatSectionMenu } from './ChatSectionMenu'
@@ -74,15 +74,15 @@ export interface ConversationSelectionScope {
   set: ChatSet | null
 }
 
-const extensionSubItems: Array<{
+// 侧栏实际渲染的扩展子项；测试从这里导入已出货列表。
+// eslint-disable-next-line react-refresh/only-export-components -- 与导航组件同源，拆文件会让出货列表和渲染脱节
+export const extensionSubItems: Array<{
   id: ExtensionsNavItem
   label: (t: I18n) => string
   icon: (props: { size?: number; strokeWidth?: number; className?: string }) => React.JSX.Element
 }> = [
   { id: 'assistants', label: (t) => t.chatNavAssistants, icon: AgentIcon },
-  { id: 'knowledge', label: (t) => t.chatNavKnowledge, icon: KnowledgeIcon },
   { id: 'media', label: (t) => t.chatNavMedia, icon: MediaIcon },
-  { id: 'notes', label: (t) => t.chatNavNotes, icon: NotesIcon },
 ]
 
 const PROJECT_PREVIEW_LIMIT = 5

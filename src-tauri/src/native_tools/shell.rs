@@ -293,6 +293,12 @@ fn build_windows_powershell_command(command: &str) -> Command {
 /// flags/kill_on_drop themselves — this only owns the program + argument shape so
 /// the foreground and background paths cannot drift apart.
 pub(crate) fn build_shell_command(command: &str) -> Command {
+    #[cfg(target_os = "android")]
+    {
+        let mut c = Command::new(crate::android_platform::android_shell_program());
+        c.args(["-c", command]);
+        return c;
+    }
     #[cfg(target_os = "windows")]
     {
         if let Some(bash) = find_git_bash() {
@@ -305,7 +311,7 @@ pub(crate) fn build_shell_command(command: &str) -> Command {
         }
         build_windows_powershell_command(command)
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(all(not(target_os = "windows"), not(target_os = "android")))]
     {
         let mut c = Command::new("sh");
         c.args(["-c", command]);
@@ -1405,6 +1411,14 @@ fn format_command_output(output: &CommandOutput) -> String {
 mod tests {
     use super::*;
     use crate::native_tools::user_home_dir;
+
+    #[test]
+    fn android_shell_program_is_system_bin_sh() {
+        assert_eq!(
+            crate::android_platform::android_shell_program(),
+            "/system/bin/sh"
+        );
+    }
 
     #[tokio::test]
     async fn captured_log_redacts_secret_across_pipe_reads() {

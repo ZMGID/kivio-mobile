@@ -9,6 +9,7 @@ use std::{
 
 use base64::{engine::general_purpose, Engine as _};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
+#[cfg(not(target_os = "android"))]
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use uuid::Uuid;
 
@@ -40,6 +41,7 @@ use crate::replace_translation::layout::{
 use crate::replace_translation::mask::{blocks_from_groups, plate_fill};
 use crate::screenshot::cleanup_temp_file;
 use crate::settings::{self, default_question_prompt, ExplainMessage, OcrMode};
+#[cfg(not(target_os = "android"))]
 use crate::shortcuts::{capture_active_selection, get_mouse_position, open_chat_window};
 use crate::state::AppState;
 use crate::utils::language_name;
@@ -126,32 +128,46 @@ pub(crate) fn active_overlay_window(app: &AppHandle) -> Option<WebviewWindow> {
 }
 
 fn register_lens_escape_shortcut(app: &AppHandle) {
-    let shortcuts = app.global_shortcut();
-    if shortcuts.is_registered(LENS_ESCAPE_SHORTCUT) {
-        return;
+    #[cfg(target_os = "android")]
+    {
+        let _ = app;
     }
+    #[cfg(not(target_os = "android"))]
+    {
+        let shortcuts = app.global_shortcut();
+        if shortcuts.is_registered(LENS_ESCAPE_SHORTCUT) {
+            return;
+        }
 
-    if let Err(err) = shortcuts.on_shortcut(LENS_ESCAPE_SHORTCUT, move |app, _shortcut, event| {
-        if event.state != ShortcutState::Pressed {
-            return;
+        if let Err(err) = shortcuts.on_shortcut(LENS_ESCAPE_SHORTCUT, move |app, _shortcut, event| {
+            if event.state != ShortcutState::Pressed {
+                return;
+            }
+            let Some(window) = active_overlay_window(app) else {
+                return;
+            };
+            if window.is_visible().ok().unwrap_or(false) {
+                let _ = app.emit_to(window.label(), "lens-close-request", ());
+                // 与 request_lens_close 相同的兜底：webview 挂死时事件无人处理，宽限期后强关。
+                schedule_forced_lens_close(app);
+            }
+        }) {
+            eprintln!("[lens-esc] failed to register temporary Escape shortcut: {err}");
         }
-        let Some(window) = active_overlay_window(app) else {
-            return;
-        };
-        if window.is_visible().ok().unwrap_or(false) {
-            let _ = app.emit_to(window.label(), "lens-close-request", ());
-            // 与 request_lens_close 相同的兜底：webview 挂死时事件无人处理，宽限期后强关。
-            schedule_forced_lens_close(app);
-        }
-    }) {
-        eprintln!("[lens-esc] failed to register temporary Escape shortcut: {err}");
     }
 }
 
 fn unregister_lens_escape_shortcut(app: &AppHandle) {
-    let shortcuts = app.global_shortcut();
-    if shortcuts.is_registered(LENS_ESCAPE_SHORTCUT) {
-        let _ = shortcuts.unregister(LENS_ESCAPE_SHORTCUT);
+    #[cfg(target_os = "android")]
+    {
+        let _ = app;
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let shortcuts = app.global_shortcut();
+        if shortcuts.is_registered(LENS_ESCAPE_SHORTCUT) {
+            let _ = shortcuts.unregister(LENS_ESCAPE_SHORTCUT);
+        }
     }
 }
 
@@ -246,6 +262,7 @@ pub(crate) async fn lens_read_image(
 /// 用户看到的就是 ready 浮条 / 旧位置，体验远差于跳到 primary。
 fn lens_position_fullscreen(app: &AppHandle, window: &WebviewWindow) -> Option<LensFrame> {
     // 全屏选区模式下禁止窗口缩放，避免鼠标靠近屏幕边缘时 OS 显示 resize 光标
+    #[cfg(not(target_os = "android"))]
     let _ = window.set_resizable(false);
 
     #[cfg(target_os = "macos")]
@@ -310,8 +327,13 @@ fn lens_position_fullscreen(app: &AppHandle, window: &WebviewWindow) -> Option<L
     let ly = mp.y as f64 / scale;
     let lw = ms.width as f64 / scale;
     let lh = ms.height as f64 / scale;
-    let _ = window.set_position(tauri::PhysicalPosition::new(mp.x, mp.y));
-    let _ = window.set_size(tauri::PhysicalSize::new(ms.width, ms.height));
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = window.set_position(tauri::PhysicalPosition::new(mp.x, mp.y));
+        let _ = window.set_size(tauri::PhysicalSize::new(ms.width, ms.height));
+    }
+    #[cfg(target_os = "android")]
+    let _ = window;
     lens_clear_interactive_region(window);
     Some(LensFrame {
         x: lx,
@@ -458,6 +480,12 @@ fn lens_set_interactive_region(
     Ok(())
 }
 
+#[cfg(target_os = "android")]
+fn lens_position_text_floating(app: &AppHandle, window: &WebviewWindow) {
+    let _ = (app, window);
+}
+
+#[cfg(not(target_os = "android"))]
 fn lens_position_text_floating(app: &AppHandle, window: &WebviewWindow) {
     // 浮动窗 = 卡片宽 + 左右 padding（前端 FLOATING_PADDING=24/边）。卡宽来自设置，与截图翻译统一。
     let card_w = app
@@ -537,7 +565,14 @@ pub(crate) fn lens_request_internal(app: &AppHandle, mode: &str) -> Result<(), S
     // 必须在 ensure_lens_window/show/set_focus 之前抓取。创建隐藏 webview 在 macOS 上也可能
     // 改变当前 focused UI element，导致 Cmd+C/AXSelectedText 读到 Lens 自己而不是前台 App。
     let pending_selection = if mode == "chat" || mode == "translateText" {
-        capture_active_selection()
+        #[cfg(not(target_os = "android"))]
+        {
+            capture_active_selection()
+        }
+        #[cfg(target_os = "android")]
+        {
+            None
+        }
     } else {
         None
     };
@@ -621,7 +656,7 @@ pub(crate) fn lens_request_internal(app: &AppHandle, mode: &str) -> Result<(), S
         windows::ensure_overlay_panel(&window);
         windows::show_overlay_panel(&window, true);
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
     {
         let _ = window.show();
         let _ = window.set_focus();
@@ -1179,6 +1214,7 @@ pub(crate) async fn lens_send_to_chat(
     };
     state.enqueue_chat_external_send(request);
 
+    #[cfg(not(target_os = "android"))]
     if let Err(err) = open_chat_window(&app) {
         state.rollback_chat_external_send(&request_id);
         for path in handoff_temp_paths {
@@ -1247,6 +1283,7 @@ pub(crate) async fn lens_send_history_to_chat(
     };
     state.enqueue_chat_external_send(request);
 
+    #[cfg(not(target_os = "android"))]
     if let Err(err) = open_chat_window(&app) {
         state.rollback_chat_external_send(&request_id);
         for path in handoff_temp_paths {
@@ -1496,8 +1533,10 @@ pub(crate) fn lens_cancel_stream(state: State<AppState>) -> Result<(), String> {
 pub(crate) fn lens_focus_webview(window: WebviewWindow) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     windows::focus_overlay_webview(&window);
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
     let _ = window.set_focus();
+    #[cfg(target_os = "android")]
+    let _ = window;
     Ok(())
 }
 
@@ -2283,12 +2322,16 @@ pub(crate) fn lens_close(app: AppHandle) -> Result<(), String> {
         // macOS：浮窗被 object_setClass 换成了自定义 NSPanel 子类，destroy() 时 tao/wry 按原类
         // 清理会抛 ObjC 异常穿过 FFI → "Rust cannot catch foreign exceptions" abort。所以只能
         // 复用（隐藏 + 复位全屏几何，避免下次 show 还停在上次浮动 bar 位置）。
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(all(not(target_os = "windows"), not(target_os = "android")))]
         {
             // macOS：换回原窗口类后 destroy，终结 WebContent 进程回收内存（about:blank 实测
             // 不回收，只有销毁进程才行）。下次触发由 ensure_lens/translate_window 冷重建。
             let _ = window.hide();
             windows::destroy_overlay_window(&window);
+        }
+        #[cfg(target_os = "android")]
+        {
+            let _ = window;
         }
     }
     #[cfg(target_os = "macos")]
@@ -2494,6 +2537,7 @@ pub(crate) fn lens_set_floating(app: AppHandle, rect: FloatingRect) -> Result<()
     };
 
     // 浮动模式需要恢复可缩放，允许后端按需 set_size 调整窗口
+    #[cfg(not(target_os = "android"))]
     let _ = window.set_resizable(true);
 
     #[cfg(target_os = "windows")]
@@ -2509,12 +2553,17 @@ pub(crate) fn lens_set_floating(app: AppHandle, rect: FloatingRect) -> Result<()
         }
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(all(not(target_os = "windows"), not(target_os = "android")))]
     {
         if let (Some(x), Some(y)) = (rect.x, rect.y) {
             let _ = window.set_position(tauri::LogicalPosition::new(x, y));
         }
         let _ = window.set_size(tauri::LogicalSize::new(rect.width, rect.height));
+    }
+
+    #[cfg(target_os = "android")]
+    {
+        let _ = (window, rect);
     }
 
     Ok(())
@@ -2613,7 +2662,7 @@ unsafe fn run_lens_animate_macos(
 }
 
 /// 非 macOS:fallback 到立即 snap 到目标矩形;前端用 setTimeout 模拟动画完成时序。
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
 #[tauri::command]
 pub(crate) fn lens_animate_floating(
     app: AppHandle,
@@ -2629,6 +2678,20 @@ pub(crate) fn lens_animate_floating(
     };
     let _ = window.set_position(tauri::LogicalPosition::new(x, y));
     let _ = window.set_size(tauri::LogicalSize::new(width, height));
+    Ok(())
+}
+
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub(crate) fn lens_animate_floating(
+    app: AppHandle,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    duration_ms: f64,
+) -> Result<(), String> {
+    let _ = (app, x, y, width, height, duration_ms);
     Ok(())
 }
 
@@ -2863,30 +2926,41 @@ pub(crate) fn lens_register_annotated_image(
 pub(crate) async fn lens_copy_image_to_clipboard(
     base64_png: String,
 ) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    {
+        let _ = base64_png;
+        return Ok(serde_json::json!({
+            "success": false,
+            "error": "clipboard is unavailable on Android"
+        }));
+    }
     // 解码 + 剪贴板都是阻塞操作，放 blocking 线程避免卡 UI 事件循环
-    let result = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
-        let bytes = general_purpose::STANDARD
-            .decode(base64_png.as_bytes())
-            .map_err(|e| format!("base64 decode failed: {e}"))?;
-        let img = image::load_from_memory(&bytes)
-            .map_err(|e| format!("png decode failed: {e}"))?
-            .to_rgba8();
-        let (w, h) = img.dimensions();
-        let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-        clipboard
-            .set_image(arboard::ImageData {
-                width: w as usize,
-                height: h as usize,
-                bytes: std::borrow::Cow::Owned(img.into_raw()),
-            })
-            .map_err(|e| format!("clipboard write failed: {e}"))
-    })
-    .await
-    .map_err(|e| e.to_string())?;
+    #[cfg(not(target_os = "android"))]
+    {
+        let result = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+            let bytes = general_purpose::STANDARD
+                .decode(base64_png.as_bytes())
+                .map_err(|e| format!("base64 decode failed: {e}"))?;
+            let img = image::load_from_memory(&bytes)
+                .map_err(|e| format!("png decode failed: {e}"))?
+                .to_rgba8();
+            let (w, h) = img.dimensions();
+            let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+            clipboard
+                .set_image(arboard::ImageData {
+                    width: w as usize,
+                    height: h as usize,
+                    bytes: std::borrow::Cow::Owned(img.into_raw()),
+                })
+                .map_err(|e| format!("clipboard write failed: {e}"))
+        })
+        .await
+        .map_err(|e| e.to_string())?;
 
-    match result {
-        Ok(()) => Ok(serde_json::json!({ "success": true })),
-        Err(e) => Ok(serde_json::json!({ "success": false, "error": e })),
+        match result {
+            Ok(()) => Ok(serde_json::json!({ "success": true })),
+            Err(e) => Ok(serde_json::json!({ "success": false, "error": e })),
+        }
     }
 }
 

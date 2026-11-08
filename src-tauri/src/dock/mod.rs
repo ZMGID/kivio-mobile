@@ -5,6 +5,7 @@
 
 pub mod fs;
 pub mod git;
+#[cfg(not(target_os = "android"))]
 pub mod terminal;
 pub mod watch;
 

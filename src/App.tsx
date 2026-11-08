@@ -1,14 +1,13 @@
 import { AppNoticeHost } from './components/AppNotice'
 import { lazy, Suspense, useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react'
-import { Select, TextArea } from './settings/public/controls'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { api, isTauriRuntime } from './api/tauri'
-import { getSettingsCached, subscribeSettings, updateSettingsCached } from './api/settingsCache'
+import { getSettingsCached, subscribeSettings } from './api/settingsCache'
 import { applyThemeSettings, disposeTheme } from './theme/theme'
-import { i18n, type Lang } from './components/i18n'
-import { useWindowInteractionFocus } from './api/windowFocus'
+import { type Lang } from './components/i18n'
 import { ChatWindowHost } from './chat/ChatWindowHost'
+import { resolveAppMode } from './appMode'
 import {
   getRememberedChatRoute,
   hashPath,
@@ -23,239 +22,11 @@ import {
 import { isChatPopoutPath } from './chat/popout/popoutRoutes'
 import { ChatErrorBoundary } from './chat/ChatErrorBoundary'
 import './styles/app.css'
-import './styles/translator.css'
-import { getTranslationLanguageOptions } from './settings/public/translationLanguages'
 
-const Lens = lazy(() => import('./Lens'))
 const Chat = lazy(() => import('./chat/Chat'))
-const ChatPopout = lazy(() => import('./chat/popout/ChatPopout'))
 
 /**
- * 翻译器主组件
- * 轻量翻译浮层：上方多行原文，下方译文；随正文增长并保留紧凑上限。
- */
-function Translator({
-  translateSource,
-  lang,
-  targetLang,
-  onTargetLangChange,
-}: {
-  translateSource: string
-  lang: Lang
-  targetLang: string | null
-  onTargetLangChange: (value: string) => Promise<void>
-}) {
-  const [input, setInput] = useState('')
-  const [result, setResult] = useState('')
-  const [resultInput, setResultInput] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const [savingLanguage, setSavingLanguage] = useState(false)
-  const [languageError, setLanguageError] = useState('')
-  const [resolvedTargetLang, setResolvedTargetLang] = useState('')
-  const savingLanguageRef = useRef(false)
-  const [submitting, setSubmitting] = useState(false)
-  // 同一帧内重复回车也必须被拦住，不能只等待 React 更新状态。
-  const submittingRef = useRef(false)
-  const resultRef = useRef<HTMLDivElement>(null)
-  const contentRef = useRef<HTMLDivElement>(null)
-  const translateSeq = useRef(0)
-  const previousTargetLang = useRef<string | null>(null)
-  const requestWindowFocus = useWindowInteractionFocus()
-  const t = i18n[lang]
-  const languageOptions = getTranslationLanguageOptions(t)
-  const targetName = languageOptions.find(option => option.value === (targetLang === 'auto' ? resolvedTargetLang : targetLang))?.label
-  const targetLabel = targetLang === 'auto'
-    ? (targetName ? `${lang === 'zh' ? '自动' : 'Auto'} → ${targetName}` : t.langAuto)
-    : `${lang === 'zh' ? '译为' : 'To '}${targetName ?? ''}`
-
-  // 自动模式的预览也由后端解析，避免界面和实际翻译维护两套语言规则。
-  useEffect(() => {
-    setResolvedTargetLang('')
-    if (targetLang !== 'auto' || !input.trim() || savingLanguage) return
-    let cancelled = false
-    void api.resolveTranslationTargetLang(input).then(value => {
-      if (!cancelled) setResolvedTargetLang(value)
-    }).catch(err => console.error('[Translator] Failed to resolve target language:', err))
-    return () => { cancelled = true }
-  }, [input, targetLang, savingLanguage])
-
-  const changeTargetLang = async (value: string) => {
-    if (value === targetLang || savingLanguageRef.current || submittingRef.current) return
-    savingLanguageRef.current = true
-    translateSeq.current += 1
-    setSavingLanguage(true)
-    setLanguageError('')
-    try {
-      await onTargetLangChange(value)
-    } catch (err) {
-      setLanguageError(err instanceof Error ? err.message : String(err))
-    } finally {
-      savingLanguageRef.current = false
-      setSavingLanguage(false)
-      contentRef.current?.querySelector('textarea')?.focus()
-    }
-  }
-
-  // 输入防抖 600ms；切换已保存的语言后立即重译。
-  useEffect(() => {
-    const seq = ++translateSeq.current
-    setResult('')
-    setResultInput('')
-    setError('')
-    setLoading(false)
-    const trimmed = input.trim()
-    if (targetLang === null || savingLanguage) return
-
-    const languageChanged = previousTargetLang.current !== null && previousTargetLang.current !== targetLang
-    previousTargetLang.current = targetLang
-    if (!trimmed) return
-    const timer = setTimeout(async () => {
-      if (seq !== translateSeq.current) return
-      setLoading(true)
-      try {
-        const translated = await api.translateText(input)
-        if (seq !== translateSeq.current) return
-        setResult(translated)
-        setResultInput(input)
-      } catch (e) {
-        if (seq !== translateSeq.current) return
-        console.error(e)
-        setError(e instanceof Error ? e.message : String(e))
-      } finally {
-        if (seq === translateSeq.current) setLoading(false)
-      }
-    }, languageChanged ? 0 : 600)
-    return () => {
-      clearTimeout(timer)
-      translateSeq.current += 1
-    }
-  }, [input, targetLang, savingLanguage])
-
-  // Esc 键关闭输入翻译窗口，释放不常用的 main WebView。
-  useEffect(() => {
-    const handler = async (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !e.defaultPrevented) {
-        try {
-          await api.closeTranslatorWindow()
-        } catch (err) {
-          console.error('[Translator] Failed to close window:', err)
-        }
-      }
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [])
-
-  // 窗口随正文增长，达到上限后由输入和译文区域分别滚动。
-  useLayoutEffect(() => {
-    const content = contentRef.current
-    if (!content || !isTauriRuntime()) return
-    let lastHeight = 0
-    const resize = () => {
-      const height = Math.min(360, Math.max(220, Math.ceil(content.getBoundingClientRect().height) + 34))
-      if (height === lastHeight) return
-      lastHeight = height
-      void api.resizeWindow(460, height).catch(err => console.error('[Translator] Failed to resize:', err))
-    }
-    resize()
-    const observer = new ResizeObserver(resize)
-    observer.observe(content)
-    return () => observer.disconnect()
-  }, [])
-
-  // Enter 键提交翻译结果
-  // IME 合成中（中/日/韩输入法选词按回车）不要触发：isComposing 是组合事件官方标志，
-  // keyCode === 229 是浏览器在 IME 拦截 keydown 时的兜底信号，两个条件并查更稳。
-  const handleKeyDown = async (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key !== 'Enter' || e.shiftKey) return
-    if (e.nativeEvent.isComposing || e.keyCode === 229) return
-    e.preventDefault()
-    if (submittingRef.current || savingLanguageRef.current || loading || !result || resultInput !== input) return
-    submittingRef.current = true
-    setSubmitting(true)
-    setError('')
-    try {
-      await api.commitTranslation(result)
-      setInput('')
-      setResult('')
-      setResultInput('')
-    } catch (e) {
-      console.error('[Translator] Failed to commit translation:', e)
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      submittingRef.current = false
-      setSubmitting(false)
-    }
-  }
-
-  return (
-    <div
-      className="window-container"
-      onPointerEnter={requestWindowFocus}
-      onPointerMove={requestWindowFocus}
-      onPointerDownCapture={requestWindowFocus}
-    >
-      <div className="window-frosted translator-panel">
-        <div ref={contentRef} className="translator-content">
-          <header className="translator-header" data-tauri-drag-region>
-            <span data-tauri-drag-region>{t.tabTranslate}</span>
-            {translateSource && <span className="translator-model" title={translateSource} data-tauri-drag-region>{translateSource}</span>}
-          </header>
-          <div className="translator-source">
-            <TextArea
-              variant="plain"
-              rows={2}
-              maxRows={4}
-              autoFocus
-              autoCapitalize="off"
-              autoCorrect="off"
-              autoComplete="off"
-              spellCheck={false}
-              placeholder={t.translatorPlaceholder}
-              value={input}
-              readOnly={submitting}
-              aria-label={t.translatorPlaceholder}
-              aria-busy={loading || submitting}
-              onChange={setInput}
-              onKeyDown={handleKeyDown}
-            />
-          </div>
-          <div className="translator-language-row">
-            <div className="translator-divider" />
-            <Select
-              size="sm"
-              ariaLabel={t.targetLang}
-              value={targetLang ?? 'auto'}
-              triggerLabel={targetLabel}
-              options={languageOptions}
-              disabled={targetLang === null || savingLanguage || submitting}
-              onChange={value => { void changeTargetLang(value) }}
-            />
-          </div>
-          <div ref={resultRef} className="translator-result custom-scrollbar" aria-live="polite" aria-busy={loading}>
-            {loading ? (
-              <p className="translator-status">{t.translatorTranslating}</p>
-            ) : result ? (
-              <p className="translator-translation">{result}</p>
-            ) : !error ? (
-              <p className="translator-status">{lang === 'zh' ? '译文会显示在这里' : 'Translation appears here'}</p>
-            ) : null}
-            {(error || languageError) && <p role="alert" className="translator-error">{languageError || error}</p>}
-          </div>
-          <footer className="translator-footer">
-            <span>{t.translatorHintEnter} · {t.translatorHintEsc}</span>
-            <span>{lang === 'zh' ? '⇧ ↵ 换行' : '⇧ ↵ New line'}</span>
-          </footer>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-/**
- * 应用根组件
- * 根据 URL hash 切换不同视图模式（翻译器、设置、lens）
+ * 应用根组件。移动端始终打开聊天壳。
  */
 // 与 index.css 的 --font-sans 默认栈保持一致（跨 mac/Win 含 CJK 覆盖）。
 const UI_FONT_FALLBACK_STACK =
@@ -264,29 +35,11 @@ const UI_MONO_FALLBACK_STACK =
   'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace'
 
 function App() {
-  // 从 URL hash 和查询参数解析当前模式
-  const getMode = () => {
-    const urlParams = new URLSearchParams(window.location.search)
-    const hash = window.location.hash.replace('#', '')
-    const path = urlParams.get('mode') || hash.split('?')[0] || ''
-
-    // 弹出窗必须走独立瘦壳，不能落入主窗 Chat.tsx（会把侧栏/设置/中心页一起打进来）。
-    if (isChatPopoutPath(path)) {
-      return 'chat-popout'
-    }
-    // 支持 #chat 或 #chat/conversation-id
-    if (isChatPath(path)) {
-      return 'chat'
-    }
-
-    return path
-  }
+  const getMode = () => resolveAppMode(window.location.hash, window.location.search)
 
   const [mode, setMode] = useState(getMode)
   const [translucentSidebar, setTranslucentSidebar] = useState(false)
-  const [translateSource, setTranslateSource] = useState<string>('')
   const [lang, setLang] = useState<Lang>('zh')
-  const [targetLang, setTargetLang] = useState<string | null>(null)
 
   useLayoutEffect(() => {
     const root = document.documentElement
@@ -350,8 +103,6 @@ function App() {
           : UI_MONO_FALLBACK_STACK,
       )
     }
-    setTargetLang(settings.targetLang || 'auto')
-    setTranslateSource(settings.translatorModel || 'AI')
     setLang((settings.settingsLanguage as Lang) || 'zh')
     // 首次应用主题后（下一帧）再开启主题色过渡，避免初始 light↔dark 闪烁；
     // 之后用户切换主题/系统主题变化时才平滑过渡。classList.add 幂等。
@@ -472,7 +223,7 @@ function App() {
   }, [revealChatWindow])
 
   useLayoutEffect(() => {
-    if (mode !== 'chat' && mode !== 'chat-popout') return
+    if (mode !== 'chat') return
     if (!isTauriRuntime()) return
     // 不变量：chat 是专用窗口，其 hash 恒为 #chat（含子路由），mode 一旦为 'chat' 便不再变。
     // 本兜底据此成立——若未来 chat 窗允许 mode 离开 'chat'，cleanup 会清掉未触发的兜底 timer
@@ -547,52 +298,21 @@ function App() {
     }
   }, [mode, persistChatWindowGeometry])
 
-  // 根据当前模式渲染对应视图
-  if (mode === 'lens') {
-    return (
-      <Suspense fallback={null}>
-        <Lens />
-      </Suspense>
-    )
-  }
   const chatSuspenseFallback = (
     <div className="flex h-full w-full items-center justify-center bg-[var(--theme-surface)]">
       <div className="h-6 w-6 animate-spin rounded-full border-2 border-[var(--theme-surface-border)] border-t-[var(--text)]" />
     </div>
   )
-  if (mode === 'chat-popout') {
-    return (
-      <ChatWindowHost translucentSidebar={translucentSidebar}>
-        <AppNoticeHost lang={lang} />
-        <Suspense fallback={chatSuspenseFallback}>
-          <ChatErrorBoundary>
-            <ChatPopout onContentReady={revealChatWindowNow} />
-          </ChatErrorBoundary>
-        </Suspense>
-      </ChatWindowHost>
-    )
-  }
-  if (mode === 'chat') {
-    return (
-      <ChatWindowHost translucentSidebar={translucentSidebar}>
-        <AppNoticeHost lang={lang} />
-        <Suspense fallback={chatSuspenseFallback}>
-          <ChatErrorBoundary>
-            <Chat onSettingsChange={applyTheme} onContentReady={revealChatWindowNow} />
-          </ChatErrorBoundary>
-        </Suspense>
-      </ChatWindowHost>
-    )
-  }
-  return <Translator
-    translateSource={translateSource}
-    lang={lang}
-    targetLang={targetLang}
-    onTargetLangChange={async value => {
-      const saved = await updateSettingsCached(current => ({ ...current, targetLang: value }))
-      setTargetLang(saved.targetLang)
-    }}
-  />
+  return (
+    <ChatWindowHost translucentSidebar={translucentSidebar}>
+      <AppNoticeHost lang={lang} />
+      <Suspense fallback={chatSuspenseFallback}>
+        <ChatErrorBoundary>
+          <Chat onSettingsChange={applyTheme} onContentReady={revealChatWindowNow} />
+        </ChatErrorBoundary>
+      </Suspense>
+    </ChatWindowHost>
+  )
 }
 
 export default App

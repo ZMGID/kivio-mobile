@@ -8,9 +8,9 @@ use std::path::PathBuf;
 use serde_json::json;
 #[cfg(target_os = "macos")]
 use tauri::TitleBarStyle;
-use tauri::{
-    window::Color, AppHandle, LogicalSize, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
-};
+#[cfg(not(target_os = "android"))]
+use tauri::{window::Color, LogicalSize, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, WebviewWindow};
 
 /// 侧栏收起时主内容区最小宽度（与前端 `CHAT_MIN_SIZE_COLLAPSED` 一致）。
 pub const CHAT_MIN_INNER_WIDTH_COLLAPSED: f64 = 400.0;
@@ -34,13 +34,20 @@ fn chat_window_size_for_visible_content(width: f64, height: f64) -> (f64, f64) {
 }
 
 pub fn apply_chat_window_min_size(window: &WebviewWindow, sidebar_expanded: bool) {
-    let width = if sidebar_expanded {
-        CHAT_MIN_INNER_WIDTH_EXPANDED
-    } else {
-        CHAT_MIN_INNER_WIDTH_COLLAPSED
-    };
-    let (width, height) = chat_window_size_for_visible_content(width, CHAT_MIN_INNER_HEIGHT);
-    let _ = window.set_min_size(Some(LogicalSize::new(width, height)));
+    #[cfg(not(target_os = "android"))]
+    {
+        let width = if sidebar_expanded {
+            CHAT_MIN_INNER_WIDTH_EXPANDED
+        } else {
+            CHAT_MIN_INNER_WIDTH_COLLAPSED
+        };
+        let (width, height) = chat_window_size_for_visible_content(width, CHAT_MIN_INNER_HEIGHT);
+        let _ = window.set_min_size(Some(LogicalSize::new(width, height)));
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = (window, sidebar_expanded);
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -98,10 +105,15 @@ pub(crate) fn apply_macos_traffic_light_position(window: &WebviewWindow) {
 
 /// Chat 作为普通桌面窗口：不置顶、不跨全 Space（与 Lens overlay 区分）。
 pub fn normalize_chat_window_behavior(window: &WebviewWindow) {
-    let _ = window.set_always_on_top(false);
-    let _ = window.set_skip_taskbar(false);
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = window.set_always_on_top(false);
+        let _ = window.set_skip_taskbar(false);
+    }
     #[cfg(target_os = "macos")]
     let _ = window.set_visible_on_all_workspaces(false);
+    #[cfg(target_os = "android")]
+    let _ = window;
 }
 
 /// macOS Chat：系统 Overlay 标题栏 + 原生交通灯；其他平台保持无边框自绘控件。
@@ -113,7 +125,7 @@ pub fn apply_chat_window_chrome(window: &WebviewWindow) {
         let _ = window.set_shadow(true);
         apply_macos_traffic_light_position(window);
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
     {
         let _ = window.set_decorations(false);
         #[cfg(target_os = "windows")]
@@ -129,6 +141,10 @@ pub fn apply_chat_window_chrome(window: &WebviewWindow) {
             let _ = window.set_background_color(Some(Color(0, 0, 0, 0)));
             let _ = window.set_shadow(false);
         }
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = window;
     }
 }
 
@@ -293,12 +309,17 @@ pub fn chat_window_set_opaque(window: WebviewWindow, opaque: bool) {
 
 /// 翻译器 / 设置等悬浮小窗：无边框透明壳。
 pub fn apply_frameless_window_chrome(window: &WebviewWindow) {
-    let _ = window.set_decorations(false);
-    let _ = window.set_shadow(false);
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = window.set_decorations(false);
+        let _ = window.set_shadow(false);
+    }
     #[cfg(target_os = "macos")]
     {
         let _ = window.set_title_bar_style(TitleBarStyle::Visible);
     }
+    #[cfg(target_os = "android")]
+    let _ = window;
 }
 
 pub const TRANSLATOR_WINDOW_LABEL: &str = "translator";
@@ -375,31 +396,40 @@ pub fn ensure_translator_window(app: &AppHandle) -> Result<WebviewWindow, String
         return Ok(window);
     }
 
-    let window = WebviewWindowBuilder::new(
-        app,
-        TRANSLATOR_WINDOW_LABEL,
-        WebviewUrl::App("index.html#translator".into()),
-    )
-    .title(TRANSLATOR_WINDOW_TITLE)
-    .inner_size(TRANSLATOR_WINDOW_WIDTH, TRANSLATOR_WINDOW_HEIGHT)
-    // Tauri's drag-region double-click checks is_resizable before maximizing.
-    // Content-driven setSize still works; this only disables user resizing/zoom.
-    .resizable(false)
-    .decorations(false)
-    .shadow(false)
-    .transparent(true)
-    .background_color(Color(0, 0, 0, 0))
-    .visible_on_all_workspaces(true)
-    .skip_taskbar(true)
-    .focused(false)
-    .visible(false)
-    .build()
-    .map_err(|e| e.to_string())?;
+    #[cfg(target_os = "android")]
+    {
+        let _ = app;
+        return Err("translator window is not available on Android".into());
+    }
 
-    #[cfg(target_os = "macos")]
-    ensure_overlay_panel(&window);
+    #[cfg(not(target_os = "android"))]
+    {
+        let window = WebviewWindowBuilder::new(
+            app,
+            TRANSLATOR_WINDOW_LABEL,
+            WebviewUrl::App("index.html#translator".into()),
+        )
+        .title(TRANSLATOR_WINDOW_TITLE)
+        .inner_size(TRANSLATOR_WINDOW_WIDTH, TRANSLATOR_WINDOW_HEIGHT)
+        // Tauri's drag-region double-click checks is_resizable before maximizing.
+        // Content-driven setSize still works; this only disables user resizing/zoom.
+        .resizable(false)
+        .decorations(false)
+        .shadow(false)
+        .transparent(true)
+        .background_color(Color(0, 0, 0, 0))
+        .visible_on_all_workspaces(true)
+        .skip_taskbar(true)
+        .focused(false)
+        .visible(false)
+        .build()
+        .map_err(|e| e.to_string())?;
 
-    Ok(window)
+        #[cfg(target_os = "macos")]
+        ensure_overlay_panel(&window);
+
+        Ok(window)
+    }
 }
 
 /**
@@ -419,54 +449,71 @@ pub fn ensure_chat_window_with_hash(app: &AppHandle, hash: &str) -> Result<Webvi
         return Ok(window);
     }
 
-    let route = hash.trim_start_matches('#');
-    let route = if route.is_empty() { "chat" } else { route };
-    let url = format!("index.html#{route}");
-    let (min_width, min_height) =
-        chat_window_size_for_visible_content(CHAT_MIN_INNER_WIDTH_COLLAPSED, CHAT_MIN_INNER_HEIGHT);
-    let (default_width, default_height) =
-        chat_window_size_for_visible_content(CHAT_DEFAULT_INNER_WIDTH, CHAT_DEFAULT_INNER_HEIGHT);
-    let mut builder = WebviewWindowBuilder::new(app, "chat", WebviewUrl::App(url.into()))
-        .title(crate::app_data::product_name())
-        .inner_size(default_width, default_height)
-        .min_inner_size(min_width, min_height)
-        .resizable(true)
-        .visible_on_all_workspaces(false)
-        .skip_taskbar(false)
-        .visible(false);
-
-    #[cfg(target_os = "macos")]
+    #[cfg(target_os = "android")]
     {
-        builder = builder
-            .decorations(true)
-            .title_bar_style(TitleBarStyle::Overlay)
-            .hidden_title(true)
-            .transparent(true)
-            .background_color(Color(0, 0, 0, 0))
-            .shadow(true);
+        let _ = (app, hash);
+        return Err("chat window is not available on Android".into());
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(not(target_os = "android"))]
     {
-        // Windows：透明无边框窗口让 Mica 穿过 WebView，圆角 / 描边 / 阴影交给 DWM。
-        builder = builder
-            .decorations(false)
-            .transparent(true)
-            .background_color(Color(0, 0, 0, 0))
-            .shadow(true);
-    }
+        let route = hash.trim_start_matches('#');
+        let route = if route.is_empty() { "chat" } else { route };
+        let url = format!("index.html#{route}");
+        let (min_width, min_height) = chat_window_size_for_visible_content(
+            CHAT_MIN_INNER_WIDTH_COLLAPSED,
+            CHAT_MIN_INNER_HEIGHT,
+        );
+        let (default_width, default_height) = chat_window_size_for_visible_content(
+            CHAT_DEFAULT_INNER_WIDTH,
+            CHAT_DEFAULT_INNER_HEIGHT,
+        );
+        let mut builder = WebviewWindowBuilder::new(app, "chat", WebviewUrl::App(url.into()))
+            .title(crate::app_data::product_name())
+            .inner_size(default_width, default_height)
+            .min_inner_size(min_width, min_height)
+            .resizable(true)
+            .visible_on_all_workspaces(false)
+            .skip_taskbar(false)
+            .visible(false);
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        // Linux：不支持系统窗口材质，始终使用不透明回退。
-        builder = builder
-            .decorations(false)
-            .transparent(false)
-            .background_color(Color(255, 255, 255, 255))
-            .shadow(false);
-    }
+        #[cfg(target_os = "macos")]
+        {
+            builder = builder
+                .decorations(true)
+                .title_bar_style(TitleBarStyle::Overlay)
+                .hidden_title(true)
+                .transparent(true)
+                .background_color(Color(0, 0, 0, 0))
+                .shadow(true);
+        }
 
-    builder.build().map_err(|e| e.to_string())
+        #[cfg(target_os = "windows")]
+        {
+            // Windows：透明无边框窗口让 Mica 穿过 WebView，圆角 / 描边 / 阴影交给 DWM。
+            builder = builder
+                .decorations(false)
+                .transparent(true)
+                .background_color(Color(0, 0, 0, 0))
+                .shadow(true);
+        }
+
+        #[cfg(all(
+            not(target_os = "macos"),
+            not(target_os = "windows"),
+            not(target_os = "android")
+        ))]
+        {
+            // Linux：不支持系统窗口材质，始终使用不透明回退。
+            builder = builder
+                .decorations(false)
+                .transparent(false)
+                .background_color(Color(255, 255, 255, 255))
+                .shadow(false);
+        }
+
+        builder.build().map_err(|e| e.to_string())
+    }
 }
 
 const POPOUT_DEFAULT_INNER_WIDTH: f64 = 720.0;
@@ -487,55 +534,68 @@ pub fn ensure_chat_popout_window(
         return Ok(window);
     }
 
-    let url = format!(
-        "index.html#chat/popout/{}",
-        urlencoding_conversation_id(conversation_id)
-    );
-    let (min_width, min_height) =
-        chat_window_size_for_visible_content(POPOUT_MIN_INNER_WIDTH, POPOUT_MIN_INNER_HEIGHT);
-    let (default_width, default_height) = chat_window_size_for_visible_content(
-        POPOUT_DEFAULT_INNER_WIDTH,
-        POPOUT_DEFAULT_INNER_HEIGHT,
-    );
-    let mut builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
-        .title("Kivio")
-        .inner_size(default_width, default_height)
-        .min_inner_size(min_width, min_height)
-        .resizable(true)
-        .visible_on_all_workspaces(false)
-        .skip_taskbar(false)
-        .visible(false);
-
-    #[cfg(target_os = "macos")]
+    #[cfg(target_os = "android")]
     {
-        builder = builder
-            .decorations(true)
-            .title_bar_style(TitleBarStyle::Overlay)
-            .hidden_title(true)
-            .transparent(true)
-            .background_color(Color(0, 0, 0, 0))
-            .shadow(true);
+        let _ = (app, label, conversation_id);
+        return Err("chat popout is not available on Android".into());
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(not(target_os = "android"))]
     {
-        builder = builder
-            .decorations(false)
-            .transparent(true)
-            .background_color(Color(0, 0, 0, 0))
-            .shadow(true);
-    }
+        let url = format!(
+            "index.html#chat/popout/{}",
+            urlencoding_conversation_id(conversation_id)
+        );
+        let (min_width, min_height) =
+            chat_window_size_for_visible_content(POPOUT_MIN_INNER_WIDTH, POPOUT_MIN_INNER_HEIGHT);
+        let (default_width, default_height) = chat_window_size_for_visible_content(
+            POPOUT_DEFAULT_INNER_WIDTH,
+            POPOUT_DEFAULT_INNER_HEIGHT,
+        );
+        let mut builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
+            .title("Kivio")
+            .inner_size(default_width, default_height)
+            .min_inner_size(min_width, min_height)
+            .resizable(true)
+            .visible_on_all_workspaces(false)
+            .skip_taskbar(false)
+            .visible(false);
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        builder = builder
-            .decorations(false)
-            .transparent(false)
-            .background_color(Color(255, 255, 255, 255))
-            .shadow(false);
-    }
+        #[cfg(target_os = "macos")]
+        {
+            builder = builder
+                .decorations(true)
+                .title_bar_style(TitleBarStyle::Overlay)
+                .hidden_title(true)
+                .transparent(true)
+                .background_color(Color(0, 0, 0, 0))
+                .shadow(true);
+        }
 
-    builder.build().map_err(|e| e.to_string())
+        #[cfg(target_os = "windows")]
+        {
+            builder = builder
+                .decorations(false)
+                .transparent(true)
+                .background_color(Color(0, 0, 0, 0))
+                .shadow(true);
+        }
+
+        #[cfg(all(
+            not(target_os = "macos"),
+            not(target_os = "windows"),
+            not(target_os = "android")
+        ))]
+        {
+            builder = builder
+                .decorations(false)
+                .transparent(false)
+                .background_color(Color(255, 255, 255, 255))
+                .shadow(false);
+        }
+
+        builder.build().map_err(|e| e.to_string())
+    }
 }
 
 fn urlencoding_conversation_id(conversation_id: &str) -> String {
@@ -592,34 +652,42 @@ fn ensure_overlay_window(
         "lens".to_string()
     };
     let url = format!("index.html#{hash}");
-    let window = WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
-        .title(title)
-        .inner_size(600.0, 72.0)
-        .always_on_top(true)
-        .visible_on_all_workspaces(true)
-        .resizable(true)
-        .decorations(false)
-        .shadow(false)
-        .transparent(true)
-        // 把 WebView2 / WKWebView 的默认背景设成全透明。Windows 上 WebView2 控件
-        // 在 HTML/CSS 把 html、body、#root 设为 transparent 之前会用系统主题色（白）
-        // 渲染首帧，导致全屏白闪 —— 设了 (0,0,0,0) 后默认背景本身就是透明的。
-        // 文档：Windows 8+ 上 webview 层的 alpha=0 被尊重；macOS 上此调用是 no-op。
-        .background_color(Color(0, 0, 0, 0))
-        .skip_taskbar(true)
-        // Tauri 默认让新窗口初始聚焦；即使 visible=false，macOS 冷创建普通 NSWindow 时也会
-        // 短暂激活 Kivio。截图浮窗随后再恢复原 App 就会触发整组窗口重排，表现为桌面闪一下。
-        // 先以非聚焦隐藏窗口创建，后续 NSPanel 显示时再由 show_overlay_panel 精确取键盘焦点。
-        .focused(false)
-        .visible(false)
-        .build()
-        .map_err(|e| e.to_string())?;
+    #[cfg(target_os = "android")]
+    {
+        let _ = (app, label, title, url);
+        return Err("overlay window is not available on Android".into());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let window = WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
+            .title(title)
+            .inner_size(600.0, 72.0)
+            .always_on_top(true)
+            .visible_on_all_workspaces(true)
+            .resizable(true)
+            .decorations(false)
+            .shadow(false)
+            .transparent(true)
+            // 把 WebView2 / WKWebView 的默认背景设成全透明。Windows 上 WebView2 控件
+            // 在 HTML/CSS 把 html、body、#root 设为 transparent 之前会用系统主题色（白）
+            // 渲染首帧，导致全屏白闪 —— 设了 (0,0,0,0) 后默认背景本身就是透明的。
+            // 文档：Windows 8+ 上 webview 层的 alpha=0 被尊重；macOS 上此调用是 no-op。
+            .background_color(Color(0, 0, 0, 0))
+            .skip_taskbar(true)
+            // Tauri 默认让新窗口初始聚焦；即使 visible=false，macOS 冷创建普通 NSWindow 时也会
+            // 短暂激活 Kivio。截图浮窗随后再恢复原 App 就会触发整组窗口重排，表现为桌面闪一下。
+            // 先以非聚焦隐藏窗口创建，后续 NSPanel 显示时再由 show_overlay_panel 精确取键盘焦点。
+            .focused(false)
+            .visible(false)
+            .build()
+            .map_err(|e| e.to_string())?;
 
-    // macOS：把浮窗转成非激活 NSPanel，使其能浮现在别的 App 原生全屏 Space 上方。
-    #[cfg(target_os = "macos")]
-    ensure_overlay_panel(&window);
+        // macOS：把浮窗转成非激活 NSPanel，使其能浮现在别的 App 原生全屏 Space 上方。
+        #[cfg(target_os = "macos")]
+        ensure_overlay_panel(&window);
 
-    Ok(window)
+        Ok(window)
+    }
 }
 
 /// macOS：把短命浮窗（lens / 翻译）转成**非激活 NSPanel**，使其能浮现在别的 App

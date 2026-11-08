@@ -19,19 +19,12 @@
   },
   "bundle": {
     "active": true,
-    "targets": [
-      "dmg",
-      "msi",
-      "nsis"
-    ],
-    "externalBin": [
-      "binaries/kivio-ocr-helper"
-    ],
+    "targets": [],
+    "externalBin": [],
     "resources": {
       "resources/skills": "skills",
       "resources/plugins": "plugins",
-      "../docs/licenses": "licenses",
-      "resources/word": "word"
+      "../docs/licenses": "licenses"
     },
     "windows": {
       "nsis": {

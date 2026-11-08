@@ -338,6 +338,7 @@ fn change_visibility(app: &AppHandle, enable: bool) -> Result<(), String> {
     set_enabled(app, enable, true)?;
     // The native surface and saved preference are authoritative; a tray refresh
     // failure must not report an already-applied visibility change as rejected.
+    #[cfg(not(target_os = "android"))]
     if let Err(error) = crate::shortcuts::setup_tray(app) {
         eprintln!("Refresh desktop pet tray state: {error}");
     }
@@ -571,6 +572,7 @@ fn draw(app: &AppHandle, state: &DesktopPet) {
         eprintln!("Desktop pet drawing failed: {error}");
         // Stop a broken renderer instead of logging and retrying twenty times a second.
         shutdown(app);
+        #[cfg(not(target_os = "android"))]
         let _ = crate::shortcuts::setup_tray(app);
     }
 }
@@ -644,18 +646,21 @@ pub fn native_action(app: &AppHandle, action: NativeAction) {
             state.inner.lock().companion.dismiss(Instant::now());
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             platform::set_speech(None);
-            let conversation = state
-                .inner
-                .lock()
-                .activity
-                .conversation(Instant::now())
-                .map(str::to_owned);
-            let result = match conversation {
-                Some(id) => crate::shortcuts::open_chat_conversation(app, &id),
-                None => crate::shortcuts::open_chat_window(app),
-            };
-            if let Err(error) = result {
-                eprintln!("Open chat from Momo: {error}");
+            #[cfg(not(target_os = "android"))]
+            {
+                let conversation = state
+                    .inner
+                    .lock()
+                    .activity
+                    .conversation(Instant::now())
+                    .map(str::to_owned);
+                let result = match conversation {
+                    Some(id) => crate::shortcuts::open_chat_conversation(app, &id),
+                    None => crate::shortcuts::open_chat_window(app),
+                };
+                if let Err(error) = result {
+                    eprintln!("Open chat from Momo: {error}");
+                }
             }
         }
         NativeAction::Hide => {

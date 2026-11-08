@@ -716,6 +716,15 @@ pub fn spawn_scheduler(app: AppHandle) {
                 .next_wake()
                 .map(|next| (next - now).clamp(1, MAX_SLEEP_SECS))
                 .unwrap_or(MAX_SLEEP_SECS);
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+                .unwrap_or(0);
+            if let Err(err) = crate::android_platform::arm_scheduled_task(
+                crate::android_platform::next_alarm_trigger_ms(now_ms, wait as u64),
+            ) {
+                eprintln!("[scheduled-tasks] alarm not armed: {err}");
+            }
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_secs(wait as u64)) => {}
                 _ = notified => {}

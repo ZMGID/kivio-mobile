@@ -1352,6 +1352,13 @@ impl Default for ChatNativeToolsConfig {
 }
 
 pub fn default_chat_working_directory() -> String {
+    #[cfg(target_os = "android")]
+    if let Ok(workspace) = std::env::var("KIVIO_APP_WORKSPACE") {
+        let trimmed = workspace.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
     directories::BaseDirs::new()
         .map(|dirs| dirs.home_dir().join("Kivio").join("workspace"))
         .unwrap_or_else(|| std::path::PathBuf::from("Kivio").join("workspace"))

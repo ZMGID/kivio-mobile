@@ -89,6 +89,34 @@ export function isChatPopoutRoute(path: string): boolean {
   return chatRouteKind(path) === 'popout'
 }
 
+export type MobileChatView =
+  | 'onboarding'
+  | 'settings'
+  | 'assistants'
+  | 'skill'
+  | 'mcp'
+  | 'media'
+  | 'schedules'
+  | 'plugins'
+  | 'conversation'
+
+/** `#chat/sessions` still opens settings. The desktop setup wizard and other cut pages open a conversation. */
+export function resolveMobileChatView(path: string): MobileChatView {
+  const kind = chatRouteKind(path)
+  if (kind === 'sessions') return 'settings'
+  if (kind === 'conversation' || kind === 'root' || kind === 'onboarding') return 'conversation'
+  if (
+    kind === 'settings'
+    || kind === 'assistants'
+    || kind === 'skill'
+    || kind === 'mcp'
+    || kind === 'media'
+    || kind === 'schedules'
+    || kind === 'plugins'
+  ) return kind
+  return 'conversation'
+}
+
 /** 把 hash 换成目标值；已是目标值则不写（避免多余的 hashchange）。 */
 export function setHash(next: string): void {
   if (window.location.hash !== next) {

@@ -263,9 +263,13 @@ fn runtime_files() -> Vec<ModelFile> {
     {
         vec![RUNTIME, PROVIDERS_SHARED]
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(all(not(target_os = "windows"), not(target_os = "android")))]
     {
         vec![RUNTIME]
+    }
+    #[cfg(target_os = "android")]
+    {
+        Vec::new()
     }
 }
 
@@ -1208,6 +1212,16 @@ fn extract_archive_entry(
     Err(format!("{entry_suffix} not found in archive"))
 }
 
+#[cfg(target_os = "android")]
+fn extract_archive_entry(
+    archive_path: &Path,
+    entry_suffix: &str,
+    output: &Path,
+) -> Result<(), String> {
+    let _ = (archive_path, entry_suffix, output);
+    Err("archive extract is not available on Android".into())
+}
+
 static ORT_INIT: OnceCell<()> = OnceCell::const_new();
 
 pub async fn ensure_ort_init(manager: &OfflineModelManager) -> Result<(), String> {
@@ -1231,11 +1245,19 @@ pub async fn ensure_ort_init(manager: &OfflineModelManager) -> Result<(), String
 /// The GUI uses [`ensure_ort_init`] for its process-wide singleton. The one-shot RapidOCR worker
 /// calls this directly because it owns a fresh process and exits immediately after one inference.
 pub fn init_ort_from_model_dir(dir: &Path) -> Result<(), String> {
-    prepare_onnxruntime_dll_dir(dir)?;
-    ort::init_from(dir.join(ONNX_RUNTIME_FILE_NAME))
-        .map_err(|e| format!("ort init_from failed: {e}"))?
-        .commit();
-    Ok(())
+    #[cfg(not(target_os = "android"))]
+    {
+        prepare_onnxruntime_dll_dir(dir)?;
+        ort::init_from(dir.join(ONNX_RUNTIME_FILE_NAME))
+            .map_err(|e| format!("ort init_from failed: {e}"))?
+            .commit();
+        return Ok(());
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = dir;
+        Err("ONNX Runtime is not available on Android".into())
+    }
 }
 
 #[cfg(target_os = "windows")]

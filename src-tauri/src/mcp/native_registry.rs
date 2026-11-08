@@ -32,15 +32,12 @@ use crate::state::AppState;
 
 use super::registry::NativeToolContext;
 use super::types::{
-    native_advisor_tool, native_automation_delete_tool, native_automation_get_tool,
-    native_automation_list_tool, native_automation_run_tool, native_automation_runs_tool,
-    native_automation_set_enabled_tool, native_automation_upsert_tool, native_bash_output_tool,
-    native_edit_file_tool, native_glob_files_tool, native_html_preview_tool,
-    native_html_render_tool, native_kill_background_tool, native_kivio_create_conversation_tool,
-    native_kivio_interrupt_tool, native_kivio_list_agents_tool,
-    native_kivio_list_conversations_tool, native_kivio_list_projects_tool,
-    native_kivio_read_conversation_tool, native_kivio_send_message_tool,
-    native_knowledge_search_tool, native_list_dir_tool, native_memory_modify_tool,
+    native_advisor_tool, native_bash_output_tool, native_edit_file_tool, native_glob_files_tool,
+    native_html_preview_tool, native_html_render_tool, native_kill_background_tool,
+    native_kivio_create_conversation_tool, native_kivio_interrupt_tool,
+    native_kivio_list_agents_tool, native_kivio_list_conversations_tool,
+    native_kivio_list_projects_tool, native_kivio_read_conversation_tool,
+    native_kivio_send_message_tool, native_list_dir_tool, native_memory_modify_tool,
     native_memory_read_tool, native_memory_search_tool, native_present_artifacts_tool,
     native_read_file_tool, native_run_command_tool, native_save_assistant_tool,
     native_search_files_tool, native_web_fetch_tool, native_web_search_tool,
@@ -150,102 +147,6 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         read_only: true,
         requires_session_consent: false,
         call: NativeToolCall::Async(call_web_fetch),
-    },
-    NativeToolEntry {
-        name: "knowledge_search",
-        def: native_knowledge_search_tool,
-        enabled: |native, _, _| native.knowledge_search,
-        parallel_safe: true,
-        timeout: ToolTimeout::Default,
-        arguments: ArgumentPolicy::Schema,
-        bypasses_approval: false,
-        read_only: true,
-        requires_session_consent: false,
-        call: NativeToolCall::Async(call_knowledge_search),
-    },
-    NativeToolEntry {
-        name: "automation_list",
-        def: native_automation_list_tool,
-        enabled: |native, _, _| native.automation,
-        parallel_safe: true,
-        timeout: ToolTimeout::Default,
-        arguments: ArgumentPolicy::Schema,
-        bypasses_approval: false,
-        read_only: true,
-        requires_session_consent: false,
-        call: NativeToolCall::Async(call_automation_list),
-    },
-    NativeToolEntry {
-        name: "automation_get",
-        def: native_automation_get_tool,
-        enabled: |native, _, _| native.automation,
-        parallel_safe: true,
-        timeout: ToolTimeout::Default,
-        arguments: ArgumentPolicy::Schema,
-        bypasses_approval: false,
-        read_only: true,
-        requires_session_consent: false,
-        call: NativeToolCall::Async(call_automation_get),
-    },
-    NativeToolEntry {
-        name: "automation_upsert",
-        def: native_automation_upsert_tool,
-        enabled: |native, _, _| native.automation,
-        parallel_safe: false,
-        timeout: ToolTimeout::Default,
-        arguments: ArgumentPolicy::Schema,
-        bypasses_approval: false,
-        read_only: false,
-        requires_session_consent: false,
-        call: NativeToolCall::Async(call_automation_upsert),
-    },
-    NativeToolEntry {
-        name: "automation_set_enabled",
-        def: native_automation_set_enabled_tool,
-        enabled: |native, _, _| native.automation,
-        parallel_safe: false,
-        timeout: ToolTimeout::Default,
-        arguments: ArgumentPolicy::Schema,
-        bypasses_approval: false,
-        read_only: false,
-        requires_session_consent: false,
-        call: NativeToolCall::Async(call_automation_set_enabled),
-    },
-    NativeToolEntry {
-        name: "automation_run",
-        def: native_automation_run_tool,
-        enabled: |native, _, _| native.automation,
-        parallel_safe: false,
-        timeout: ToolTimeout::Arguments(automation_run_timeout_ms),
-        arguments: ArgumentPolicy::Schema,
-        bypasses_approval: false,
-        read_only: false,
-        requires_session_consent: false,
-        call: NativeToolCall::Async(call_automation_run),
-    },
-    NativeToolEntry {
-        name: "automation_runs",
-        def: native_automation_runs_tool,
-        enabled: |native, _, _| native.automation,
-        parallel_safe: true,
-        timeout: ToolTimeout::Default,
-        arguments: ArgumentPolicy::Schema,
-        bypasses_approval: false,
-        read_only: true,
-        requires_session_consent: false,
-        call: NativeToolCall::Async(call_automation_runs),
-    },
-    NativeToolEntry {
-        name: "automation_delete",
-        def: native_automation_delete_tool,
-        enabled: |native, _, _| native.automation,
-        parallel_safe: false,
-        timeout: ToolTimeout::Default,
-        arguments: ArgumentPolicy::Schema,
-        bypasses_approval: false,
-        read_only: false,
-        requires_session_consent: false,
-        call: NativeToolCall::Async(call_automation_delete),
     },
     NativeToolEntry {
         name: "advisor",
@@ -1773,13 +1674,6 @@ mod tests {
                 .milliseconds(1, &serde_json::json!({"wait_ms": u64::MAX})),
             Some(crate::settings::CHAT_TOOL_MAX_TIMEOUT_MS)
         );
-        let automation = native_automation_run_tool();
-        assert_eq!(
-            automation
-                .timeout_policy()
-                .milliseconds(60_000, &serde_json::json!({"timeout_seconds": 120})),
-            Some(125_000)
-        );
         for entry in NATIVE_TOOLS {
             let tool = (entry.def)();
             assert_eq!(
@@ -2010,14 +1904,6 @@ mod tests {
     const EXPECTED_ORDER: &[&str] = &[
         "web_search",
         "web_fetch",
-        "knowledge_search",
-        "automation_list",
-        "automation_get",
-        "automation_upsert",
-        "automation_set_enabled",
-        "automation_run",
-        "automation_runs",
-        "automation_delete",
         "advisor",
         "read",
         "ls",
@@ -2089,10 +1975,6 @@ mod tests {
             [
                 "web_search",
                 "web_fetch",
-                "knowledge_search",
-                "automation_list",
-                "automation_get",
-                "automation_runs",
                 "advisor",
                 "read",
                 "ls",
@@ -2156,10 +2038,6 @@ mod tests {
             [
                 "web_search",
                 "web_fetch",
-                "knowledge_search",
-                "automation_list",
-                "automation_get",
-                "automation_runs",
                 "advisor",
                 "read",
                 "ls",
@@ -2324,18 +2202,7 @@ mod tests {
         automation_only.automation = true;
         assert_eq!(
             names(&automation_only, false, false),
-            [
-                "automation_list",
-                "automation_get",
-                "automation_upsert",
-                "automation_set_enabled",
-                "automation_run",
-                "automation_runs",
-                "automation_delete",
-                "present_artifacts",
-                "html_render",
-                "html_preview",
-            ]
+            ["present_artifacts", "html_render", "html_preview"]
         );
 
         // memory gate is independent of native toggles.
@@ -2371,14 +2238,6 @@ mod tests {
             [
                 "web_search",
                 "web_fetch",
-                "knowledge_search",
-                "automation_list",
-                "automation_get",
-                "automation_upsert",
-                "automation_set_enabled",
-                "automation_run",
-                "automation_runs",
-                "automation_delete",
                 "read",
                 "grep",
                 "glob",
